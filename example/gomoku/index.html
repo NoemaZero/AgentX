@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>五子棋 - Gomoku</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- 炫酷粒子背景 -->
+    <div class="particles">
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+    </div>
+
+    <div class="game-container">
+        <!-- 游戏标题 -->
+        <header class="game-header">
+            <h1>五子棋</h1>
+            <p class="subtitle">Gomoku / Five in a Row</p>
+        </header>
+
+        <!-- 游戏信息面板 -->
+        <div class="info-panel">
+            <div class="player-info current-player">
+                <span class="player-label">当前玩家:</span>
+                <span class="player-indicator" id="currentPlayerIndicator">
+                    <span class="stone black"></span>
+                    <span class="player-name">黑方</span>
+                </span>
+            </div>
+            <div class="game-status" id="gameStatus">
+                <span class="status-label">游戏状态:</span>
+                <span class="status-text" id="statusText">进行中</span>
+            </div>
+            <div class="move-count">
+                <span class="move-label">步数:</span>
+                <span id="moveCount">0</span>
+            </div>
+            <!-- AI 状态指示器 -->
+            <div class="ai-status" id="aiStatus" style="display: none;">
+                <span class="ai-icon">🤖</span>
+                <span class="ai-status-text" id="aiStatusText">AI 思考中...</span>
+            </div>
+        </div>
+
+        <!-- 游戏设置面板 -->
+        <div class="settings-panel">
+            <div class="setting-item">
+                <label for="gameMode">游戏模式:</label>
+                <select id="gameMode">
+                    <option value="pve">人机对战</option>
+                    <option value="pvp">人人对战</option>
+                </select>
+            </div>
+            <div class="setting-item ai-setting" id="aiSetting" style="display: none;">
+                <label for="difficulty">AI 难度:</label>
+                <select id="difficulty">
+                    <option value="easy">简单</option>
+                    <option value="medium" selected>中等</option>
+                    <option value="hard">困难</option>
+                    <option value="expert">专家</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- 棋盘容器 -->
+        <div class="board-container">
+            <div class="board-wrapper">
+                <div class="board" id="board">
+                    <!-- 棋盘网格将由 JavaScript 生成 -->
+                </div>
+                <div class="board-overlay" id="boardOverlay"></div>
+            </div>
+        </div>
+
+        <!-- 控制按钮 -->
+        <div class="controls">
+            <button class="btn btn-undo" id="undoBtn" disabled>
+                <span class="btn-icon">↩</span>
+                <span class="btn-text">悔棋</span>
+            </button>
+            <button class="btn btn-restart" id="restartBtn">
+                <span class="btn-icon">↻</span>
+                <span class="btn-text">重新开始</span>
+            </button>
+        </div>
+
+        <!-- 获胜提示 -->
+        <div class="win-modal" id="winModal">
+            <div class="win-content">
+                <h2 class="win-title">🎉 游戏结束!</h2>
+                <p class="win-message" id="winMessage">黑方获胜!</p>
+                <button class="btn btn-play-again" id="playAgainBtn">
+                    再来一局
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 脚本引入 -->
+    <script src="js/board.js"></script>
+    <script src="js/game.js"></script>
+    <script src="js/ai.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
