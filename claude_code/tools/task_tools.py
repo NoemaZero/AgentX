@@ -23,6 +23,17 @@ from claude_code.tools.tool_names import (
 )
 
 
+def _get_task_manager(kwargs: dict[str, Any]) -> Any | None:
+    """Resolve task_manager from kwargs or engine.task_manager."""
+    tm = kwargs.get("task_manager")
+    if tm is not None:
+        return tm
+    engine = kwargs.get("engine")
+    if engine is not None and hasattr(engine, "task_manager"):
+        return engine.task_manager
+    return None
+
+
 class TaskOutputTool(BaseTool):
     """Get the output of a background task."""
 
@@ -56,7 +67,7 @@ class TaskOutputTool(BaseTool):
 
     async def execute(self, *, tool_input: dict[str, Any], cwd: str, **kwargs: Any) -> ToolResult:
         task_id = tool_input.get("task_id", "")
-        task_manager = kwargs.get("task_manager")
+        task_manager = _get_task_manager(kwargs)
 
         if task_manager is None:
             return ToolResult(data="Error: Task manager not available")
@@ -123,7 +134,7 @@ class TaskStopTool(BaseTool):
         if not task_id:
             return ToolResult(data="Error: task_id is required")
 
-        task_manager = kwargs.get("task_manager")
+        task_manager = _get_task_manager(kwargs)
         if task_manager is None:
             return ToolResult(data="Error: Task manager not available")
 
@@ -164,7 +175,7 @@ class TaskCreateTool(BaseTool):
         ]
 
     async def execute(self, *, tool_input: dict[str, Any], cwd: str, **kwargs: Any) -> ToolResult:
-        task_manager = kwargs.get("task_manager")
+        task_manager = _get_task_manager(kwargs)
         if task_manager is None:
             return ToolResult(data="Error: Task manager not available")
 
@@ -205,7 +216,7 @@ class TaskGetTool(BaseTool):
         ]
 
     async def execute(self, *, tool_input: dict[str, Any], cwd: str, **kwargs: Any) -> ToolResult:
-        task_manager = kwargs.get("task_manager")
+        task_manager = _get_task_manager(kwargs)
         if task_manager is None:
             return ToolResult(data="Error: Task manager not available")
 
@@ -248,7 +259,7 @@ class TaskUpdateTool(BaseTool):
         ]
 
     async def execute(self, *, tool_input: dict[str, Any], cwd: str, **kwargs: Any) -> ToolResult:
-        task_manager = kwargs.get("task_manager")
+        task_manager = _get_task_manager(kwargs)
         if task_manager is None:
             return ToolResult(data="Error: Task manager not available")
 
@@ -283,7 +294,7 @@ class TaskListTool(BaseTool):
         ]
 
     async def execute(self, *, tool_input: dict[str, Any], cwd: str, **kwargs: Any) -> ToolResult:
-        task_manager = kwargs.get("task_manager")
+        task_manager = _get_task_manager(kwargs)
         if task_manager is None:
             return ToolResult(data="Error: Task manager not available")
 
