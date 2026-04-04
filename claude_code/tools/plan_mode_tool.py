@@ -28,15 +28,7 @@ class EnterPlanModeTool(BaseTool):
         # Set plan mode in app state if available
         app_state_store = kwargs.get("app_state_store")
         if app_state_store is not None:
-            from claude_code.state.app_state import AppState
-
-            app_state_store.update(lambda s: AppState(
-                busy=s.busy,
-                todos=s.todos,
-                turn_count=s.turn_count,
-                total_cost_usd=s.total_cost_usd,
-                plan_mode=True,
-            ))
+            app_state_store.update(lambda s: s.set_plan_mode(True))
         return ToolResult(data="Entered plan mode. Read-only tools are available. Use ExitPlanMode when ready to implement.")
 
 
@@ -62,13 +54,5 @@ class ExitPlanModeTool(BaseTool):
     async def execute(self, *, tool_input: dict[str, Any], cwd: str, **kwargs: Any) -> ToolResult:
         app_state_store = kwargs.get("app_state_store")
         if app_state_store is not None:
-            from claude_code.state.app_state import AppState
-
-            app_state_store.update(lambda s: AppState(
-                busy=s.busy,
-                todos=s.todos,
-                turn_count=s.turn_count,
-                total_cost_usd=s.total_cost_usd,
-                plan_mode=False,
-            ))
+            app_state_store.update(lambda s: s.set_plan_mode(False))
         return ToolResult(data="Exited plan mode. All tools are now available for implementation.")

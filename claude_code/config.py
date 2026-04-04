@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from claude_code.data_types import PermissionMode, coerce_str_enum
+from claude_code.data_types import PermissionMode, ProviderType, coerce_str_enum
 from claude_code.pydantic_models import FrozenModel
 
 
@@ -23,7 +23,9 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "deepseek-reasoner": 64_000,
 }
 
-DEFAULT_MODEL = "gpt-4o"
+DEFAULT_MODEL = "deepseek-chat"
+DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
+DEFAULT_PROVIDER = ProviderType.DEEPSEEK
 DEFAULT_MAX_TOKENS = 16_384
 DEFAULT_MAX_TURNS = 100
 
@@ -33,8 +35,8 @@ class Config(FrozenModel):
 
     model: str = DEFAULT_MODEL
     api_key: str = ""
-    base_url: str = "https://api.openai.com/v1"
-    provider: str = ""  # "openai" | "deepseek" | "custom" | "" (auto-detect)
+    base_url: str = DEFAULT_BASE_URL
+    provider: ProviderType = DEFAULT_PROVIDER
     ssl_verify: bool = True  # SSL 证书验证，所有供应商通用
     max_tokens: int = DEFAULT_MAX_TOKENS
     max_turns: int = DEFAULT_MAX_TURNS
@@ -66,12 +68,16 @@ def load_config(
     non_interactive: bool = False,
 ) -> Config:
     """Build config from env vars + explicit overrides."""
-    resolved_api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
-    resolved_base_url = base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    resolved_model = model or os.environ.get("CLAUDE_CODE_MODEL", DEFAULT_MODEL)
-    resolved_provider = provider or os.environ.get("CLAUDE_CODE_PROVIDER", "")
+    resolved_api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
+    resolved_base_url = base_url or os.environ.get("DEEPSEEK_BASE_URL", DEFAULT_BASE_URL)
+    resolved_model = model or os.environ.get("DEEPSEEK_CODE_MODEL", DEFAULT_MODEL)
+    resolved_provider = coerce_str_enum(
+        ProviderType,
+        provider or os.environ.get("PROVIDER", ""),
+        default=DEFAULT_PROVIDER,
+    )
     if ssl_verify is None:
-        env_val = os.environ.get("CLAUDE_CODE_SSL_VERIFY", "true")
+        env_val = os.environ.get("DEEPSEEK_SSL_VERIFY", "true")
         resolved_ssl_verify = env_val.lower() not in ("false", "0", "no")
     else:
         resolved_ssl_verify = ssl_verify

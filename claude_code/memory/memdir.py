@@ -57,5 +57,3 @@ def format_memory_for_prompt(memory: dict[str, Any]) -> str:
         parts.append(session_memory)
 
     return "\n\n".join(parts)
-
-    return "\n\n".join(parts)

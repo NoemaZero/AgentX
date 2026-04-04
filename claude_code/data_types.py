@@ -60,9 +60,26 @@ class PermissionMode(StrEnum):
     PLAN = "plan"
 
 
+class ProviderType(StrEnum):
+    """LLM provider type — replaces raw string in Config."""
+
+    AUTO = ""  # auto-detect from base_url
+    CUSTOM = "custom"
+    DEEPSEEK = "deepseek"
+    OPENAI = "openai"
+
+
 class PermissionBehavior(StrEnum):
     ALLOW = "allow"
     ASK = "ask"
+    DENY = "deny"
+
+
+class PermissionDecision(StrEnum):
+    """User's response to an interactive permission prompt."""
+
+    ALLOW_ONCE = "allow_once"
+    ALLOW_SESSION = "allow_session"
     DENY = "deny"
 
 

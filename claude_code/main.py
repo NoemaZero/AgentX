@@ -31,7 +31,7 @@ from claude_code.data_types import PermissionMode, StreamEventType
 @click.option("--api-key", envvar="OPENAI_API_KEY", default=None, help="API key")
 @click.option("--base-url", envvar="OPENAI_BASE_URL", default=None, help="API base URL")
 @click.option("--provider", "-p", default=None, help="LLM provider (openai, deepseek, custom). Auto-detected if omitted.")
-@click.option("--ssl-verify", is_flag=True, default=False, help="Enable SSL certificate verification.")
+@click.option("--ssl-verify/--no-ssl-verify", default=None, help="Enable/disable SSL certificate verification (default: from env or True).")
 @click.option("--max-tokens", default=None, type=int, help="Max output tokens")
 @click.option("--max-turns", default=None, type=int, help="Max agentic turns")
 @click.option("--cwd", default=None, help="Working directory")

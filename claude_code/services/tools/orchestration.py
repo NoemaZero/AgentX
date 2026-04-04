@@ -19,7 +19,13 @@ import time
 from typing import Any, AsyncIterator
 
 from claude_code.tools.base import BaseTool
-from claude_code.data_types import ToolExecutionStatus, ToolResult, ToolResultMessage
+from claude_code.data_types import (
+    PermissionBehavior,
+    PermissionDecision,
+    ToolExecutionStatus,
+    ToolResult,
+    ToolResultMessage,
+)
 from claude_code.pydantic_models import FrozenModel
 
 logger = logging.getLogger(__name__)
@@ -90,6 +96,8 @@ async def run_tools(
     tools_by_name: dict[str, BaseTool],
     cwd: str,
     permission_checker: Any | None = None,
+    hook_manager: Any | None = None,
+    ask_callback: Any | None = None,
     **kwargs: Any,
 ) -> list[ToolResultMessage]:
     """Execute tool calls and return results.
@@ -102,6 +110,8 @@ async def run_tools(
         tools_by_name=tools_by_name,
         cwd=cwd,
         permission_checker=permission_checker,
+        hook_manager=hook_manager,
+        ask_callback=ask_callback,
         **kwargs,
     ):
         if isinstance(event_or_result, ToolResultMessage):
@@ -114,6 +124,8 @@ async def run_tools_streaming(
     tools_by_name: dict[str, BaseTool],
     cwd: str,
     permission_checker: Any | None = None,
+    hook_manager: Any | None = None,
+    ask_callback: Any | None = None,
     **kwargs: Any,
 ) -> AsyncIterator[ToolProgressEvent | ToolResultMessage]:
     """Execute tool calls as an async generator, yielding progress events.
@@ -138,7 +150,13 @@ async def run_tools_streaming(
             )
 
         tasks = [
-            _execute_single_tool(tc, tools_by_name, cwd, permission_checker=permission_checker, **kwargs)
+            _execute_single_tool(
+                tc, tools_by_name, cwd,
+                permission_checker=permission_checker,
+                hook_manager=hook_manager,
+                ask_callback=ask_callback,
+                **kwargs,
+            )
             for tc in concurrent_calls
         ]
         concurrent_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -181,7 +199,11 @@ async def run_tools_streaming(
         try:
             start = time.monotonic()
             result = await _execute_single_tool(
-                tc, tools_by_name, cwd, permission_checker=permission_checker, **kwargs
+                tc, tools_by_name, cwd,
+                permission_checker=permission_checker,
+                hook_manager=hook_manager,
+                ask_callback=ask_callback,
+                **kwargs,
             )
             duration = (time.monotonic() - start) * 1000
             yield ToolProgressEvent(
@@ -212,6 +234,8 @@ async def _execute_single_tool(
     tools_by_name: dict[str, BaseTool],
     cwd: str,
     permission_checker: Any | None = None,
+    hook_manager: Any | None = None,
+    ask_callback: Any | None = None,
     **kwargs: Any,
 ) -> ToolResultMessage:
     """Execute a single tool call and return a ToolResultMessage."""
@@ -256,9 +280,31 @@ async def _execute_single_tool(
             msg = perm_result.message or f"Permission denied for tool '{tool_name}'"
             return ToolResultMessage(tool_call_id=tc_id, content=msg)
         if perm_result.behavior == "ask":
-            # In interactive mode, we would prompt the user here.
-            # For now, auto-allow (matches bypassPermissions behavior).
-            logger.debug("Permission 'ask' for %s — auto-allowing", tool_name)
+            # Interactive permission prompt
+            if ask_callback is not None:
+                try:
+                    decision = await ask_callback(
+                        tool_name=tool_name,
+                        tool_input=tool_input,
+                        is_read_only=is_read_only,
+                    )
+                    if decision == PermissionDecision.DENY:
+                        return ToolResultMessage(
+                            tool_call_id=tc_id,
+                            content=f"Permission denied by user for tool '{tool_name}'",
+                        )
+                    if decision == PermissionDecision.ALLOW_SESSION:
+                        permission_checker.grant_session_permission(tool_name)
+                    # ALLOW_ONCE or ALLOW_SESSION → fall through to execute
+                except Exception as ask_exc:
+                    logger.warning("Permission ask callback error: %s", ask_exc)
+                    return ToolResultMessage(
+                        tool_call_id=tc_id,
+                        content=f"Permission error for tool '{tool_name}': {ask_exc}",
+                    )
+            else:
+                # No interactive callback available — auto-allow (matches bypassPermissions)
+                logger.debug("Permission 'ask' for %s — no callback, auto-allowing", tool_name)
 
     # Validate input
     validation = await tool.validate_input(tool_input)
@@ -268,11 +314,32 @@ async def _execute_single_tool(
             content=f"Validation error: {validation.message}",
         )
 
+    # Pre-tool-use hooks (may modify input)
+    if hook_manager is not None:
+        try:
+            tool_input = await hook_manager.run_pre_tool_use(
+                tool_name=tool_name,
+                tool_input=tool_input,
+            )
+        except Exception as hook_exc:
+            logger.warning("Pre-tool-use hook error for %s: %s", tool_name, hook_exc)
+
     # Execute
     logger.debug("Executing tool %s with input: %s", tool_name, tool_input)
     result = await tool.execute(tool_input=tool_input, cwd=cwd, **kwargs)
 
     content = str(result.data) if result.data is not None else "(no output)"
+
+    # Post-tool-use hooks (may modify output)
+    if hook_manager is not None:
+        try:
+            content = await hook_manager.run_post_tool_use(
+                tool_name=tool_name,
+                tool_input=tool_input,
+                tool_output=content,
+            )
+        except Exception as hook_exc:
+            logger.warning("Post-tool-use hook error for %s: %s", tool_name, hook_exc)
 
     # Truncate if result exceeds max size
     if len(content) > tool.max_result_size_chars:

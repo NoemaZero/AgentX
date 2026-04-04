@@ -148,8 +148,8 @@ class DiffCommand(Command):
 
         config = kwargs.get("config")
         cwd = config.cwd if config else os.getcwd()
-        diff_args = args.strip() if args.strip() else "--stat"
-        result = await run_git_command(f"diff {diff_args}", cwd=cwd)
+        diff_args = args.strip().split() if args.strip() else ["--stat"]
+        result = await run_git_command(cwd, "diff", *diff_args)
         return result if result else "(no changes)"
 
 
