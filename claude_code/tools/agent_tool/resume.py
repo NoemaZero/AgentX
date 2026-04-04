@@ -1,200 +1,379 @@
-"""Resume a previously-running background agent — translation of resumeAgent.ts.
+"""Resume background agents — translation of tools/AgentTool/resumeAgent.ts.
 
-Key responsibilities:
-  1. Read transcript + metadata from saved agent state
-  2. Clean messages (orphaned thinking, unresolved tool uses)
-  3. Resolve agent type (fork-worker vs. named agent)
-  4. Restore worktree if applicable
-  5. Re-launch via ``run_async_agent_lifecycle``
+Provides ``resume_agent_background()`` which loads a previous agent's
+transcript from disk, cleans messages (filter orphaned tool_use blocks,
+whitespace-only assistant messages), reconstructs content replacement
+state, and relaunches the agent via ``run_async_agent_lifecycle()``.
+
+Handles:
+  - Fork agent resume (inherits parent system prompt)
+  - Worktree resume (validates directory still exists, bumps mtime)
+  - Agent definition lookup (fork → type match → fallback to general)
+  - Transcript loading + message cleaning (3-pass filter)
+  - Content replacement state reconstruction
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
+import os
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
-from claude_code.data_types import Message, UserMessage
+from claude_code.data_types import (
+    Message,
+    StreamEvent,
+    UserMessage,
+)
 from claude_code.tools.agent_tool.constants import AGENT_TOOL_NAME
-from claude_code.tools.agent_tool.definitions import BaseAgentDefinition
-from claude_code.tools.agent_tool.fork import FORK_AGENT, is_in_fork_child
+from claude_code.tools.agent_tool.definitions import (
+    BaseAgentDefinition,
+    is_built_in_agent,
+)
+from claude_code.tools.agent_tool.fork import FORK_AGENT, is_fork_subagent_enabled
 from claude_code.tools.agent_tool.utils import run_async_agent_lifecycle
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["resume_agent_background"]
+__all__ = [
+    "ResumeAgentResult",
+    "resume_agent_background",
+]
 
 
 # ---------------------------------------------------------------------------
-# Transcript-related helpers
+# Result type
 # ---------------------------------------------------------------------------
 
-_FORK_BOILERPLATE_TAG = "fork-boilerplate"
+
+class ResumeAgentResult(NamedTuple):
+    """Return type for ``resume_agent_background``."""
+
+    agent_id: str
+    description: str
+    output_file: str
 
 
-def _clean_transcript_messages(messages: list[dict[str, Any]]) -> list[Message]:
-    """Clean a saved transcript for resumption.
+# ---------------------------------------------------------------------------
+# Message filtering helpers (translation of utils/messages.ts filters)
+# ---------------------------------------------------------------------------
 
-    1. Strip leading/trailing whitespace from text blocks.
-    2. Remove orphaned ``thinking`` blocks that precede nothing.
-    3. Remove assistant messages whose tool_use blocks have no matching result.
+
+def _filter_unresolved_tool_uses(messages: list[Message]) -> list[Message]:
+    """Remove assistant messages containing tool_use blocks without a
+    corresponding tool_result in later user messages.
+
+    Translation of filterUnresolvedToolUses.
     """
-    # Build set of tool_use_ids that have a result
-    result_ids: set[str] = set()
+    # Collect all tool_use_ids that have results
+    ids_with_results: set[str] = set()
     for msg in messages:
-        if msg.get("role") != "user":
-            continue
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                tid = block.get("tool_use_id", "")
-                if tid:
-                    result_ids.add(tid)
+        content = getattr(msg, "content", [])
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    tid = block.get("tool_use_id", "")
+                    if tid:
+                        ids_with_results.add(tid)
 
-    cleaned: list[Message] = []
+    result: list[Message] = []
     for msg in messages:
-        role = msg.get("role", "")
-        content = msg.get("content")
+        msg_type = getattr(msg, "type", None)
+        if msg_type == "assistant":
+            content = getattr(getattr(msg, "message", None), "content", [])
+            if isinstance(content, list):
+                has_unresolved = any(
+                    isinstance(b, dict)
+                    and b.get("type") == "tool_use"
+                    and b.get("id", "") not in ids_with_results
+                    for b in content
+                )
+                if has_unresolved:
+                    continue
+        result.append(msg)
+    return result
 
-        # Skip assistant messages with unresolved tool_use
-        if role == "assistant" and isinstance(content, list):
-            has_orphaned = any(
-                isinstance(b, dict)
-                and b.get("type") == "tool_use"
-                and b.get("id", "") not in result_ids
-                for b in content
-            )
-            if has_orphaned:
-                continue
 
-        # Skip empty messages
-        if not content:
-            continue
+def _filter_orphaned_thinking_only_messages(messages: list[Message]) -> list[Message]:
+    """Remove assistant messages that contain only thinking blocks.
 
-        # Reconstruct as Message (simplified: use UserMessage for user, dict for assistant)
-        cleaned.append(msg)  # type: ignore[arg-type]
+    Translation of filterOrphanedThinkingOnlyMessages.
+    """
+    result: list[Message] = []
+    for msg in messages:
+        msg_type = getattr(msg, "type", None)
+        if msg_type == "assistant":
+            content = getattr(getattr(msg, "message", None), "content", [])
+            if isinstance(content, list):
+                non_thinking = [
+                    b for b in content
+                    if not (isinstance(b, dict) and b.get("type") == "thinking")
+                ]
+                if not non_thinking:
+                    continue
+        result.append(msg)
+    return result
 
-    return cleaned
+
+def _filter_whitespace_only_assistant_messages(messages: list[Message]) -> list[Message]:
+    """Remove assistant messages that consist only of whitespace text blocks.
+
+    Translation of filterWhitespaceOnlyAssistantMessages.
+    """
+    result: list[Message] = []
+    for msg in messages:
+        msg_type = getattr(msg, "type", None)
+        if msg_type == "assistant":
+            content = getattr(getattr(msg, "message", None), "content", [])
+            if isinstance(content, list):
+                has_substance = False
+                for block in content:
+                    if isinstance(block, dict):
+                        btype = block.get("type", "")
+                        if btype == "text":
+                            text = block.get("text", "")
+                            if text.strip():
+                                has_substance = True
+                                break
+                        elif btype != "text":
+                            has_substance = True
+                            break
+                    else:
+                        has_substance = True
+                        break
+                if not has_substance:
+                    continue
+        result.append(msg)
+    return result
 
 
 # ---------------------------------------------------------------------------
-# Metadata helpers
+# Transcript / metadata loading stubs
 # ---------------------------------------------------------------------------
 
 
-def _read_agent_metadata(metadata_path: Path) -> dict[str, Any]:
-    """Read saved agent metadata JSON."""
-    if not metadata_path.exists():
-        return {}
+async def _get_agent_transcript(agent_id: str) -> dict[str, Any] | None:
+    """Load a saved agent transcript from session storage.
+
+    Translation of getAgentTranscript — returns ``{messages, contentReplacements}``
+    or ``None`` if not found.
+    """
     try:
-        return json.loads(metadata_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Failed to read agent metadata %s: %s", metadata_path, exc)
-        return {}
+        from claude_code.utils.history import load_agent_transcript
+
+        return await load_agent_transcript(agent_id)
+    except (ImportError, Exception):
+        logger.debug("Could not load transcript for %s", agent_id, exc_info=True)
+        return None
 
 
-def _read_agent_transcript(transcript_path: Path) -> list[dict[str, Any]]:
-    """Read saved agent transcript JSON."""
-    if not transcript_path.exists():
-        return []
+async def _read_agent_metadata(agent_id: str) -> dict[str, Any] | None:
+    """Load saved agent metadata (agentType, description, worktreePath).
+
+    Translation of readAgentMetadata.
+    """
     try:
-        data = json.loads(transcript_path.read_text(encoding="utf-8"))
-        if isinstance(data, list):
-            return data
-        return []
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Failed to read transcript %s: %s", transcript_path, exc)
-        return []
+        from claude_code.utils.history import read_agent_metadata
+
+        return await read_agent_metadata(agent_id)
+    except (ImportError, Exception):
+        logger.debug("Could not load metadata for %s", agent_id, exc_info=True)
+        return None
+
+
+def _get_task_output_path(agent_id: str) -> str:
+    """Return the file path for the agent's output transcript.
+
+    Translation of getTaskOutputPath.
+    """
+    try:
+        from claude_code.utils.history import get_task_output_path
+
+        return get_task_output_path(agent_id)
+    except (ImportError, Exception):
+        return f"/tmp/agent-output-{agent_id}.jsonl"
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Core resume function
 # ---------------------------------------------------------------------------
 
 
 async def resume_agent_background(
     *,
     agent_id: str,
-    state_dir: Path,
+    prompt: str,
     parent_engine: Any,
-    agent_registry: dict[str, BaseAgentDefinition] | None = None,
-) -> None:
-    """Resume a background agent from saved state.
+    active_agents: list[BaseAgentDefinition] | None = None,
+    parent_system_prompt: str | None = None,
+) -> ResumeAgentResult:
+    """Resume a previously-running background agent.
 
     Translation of resumeAgentBackground from resumeAgent.ts.
 
-    Args:
-        agent_id: Unique identifier for the agent being resumed.
-        state_dir: Directory containing ``transcript.json`` and ``metadata.json``.
-        parent_engine: The parent QueryEngine for context.
-        agent_registry: Map of agent_type → AgentDefinition for lookup.
+    Steps:
+      1. Load transcript + metadata
+      2. Clean messages (3-pass filter)
+      3. Validate worktree (if any)
+      4. Resolve agent definition (fork → type → fallback)
+      5. Resolve fork parent system prompt (if fork resume)
+      6. Build worker tools + runAgentParams
+      7. Register async agent + launch lifecycle
+
+    Parameters
+    ----------
+    agent_id:
+        ID of the agent to resume.
+    prompt:
+        Continuation prompt to append.
+    parent_engine:
+        Parent query engine (for config, tools, permissions).
+    active_agents:
+        List of active agent definitions to search for the agent type.
+    parent_system_prompt:
+        Pre-built system prompt for fork resume.
+
+    Returns
+    -------
+    ResumeAgentResult
+        The agent_id, description, and output file path.
     """
-    transcript_path = state_dir / "transcript.json"
-    metadata_path = state_dir / "metadata.json"
+    from claude_code.tools.agent_tool.built_in import GENERAL_PURPOSE_AGENT
+    from claude_code.tools.agent_tool.run_agent import run_agent
 
-    # 1. Read saved state
-    raw_messages = _read_agent_transcript(transcript_path)
-    metadata = _read_agent_metadata(metadata_path)
+    start_time = time.time()
 
-    if not raw_messages:
-        logger.warning("No transcript for agent %s — cannot resume", agent_id)
-        return
+    # ── Step 1: Load transcript + metadata ──
+    transcript, meta = await asyncio.gather(
+        _get_agent_transcript(agent_id),
+        _read_agent_metadata(agent_id),
+    )
+    if not transcript:
+        raise RuntimeError(f"No transcript found for agent ID: {agent_id}")
 
-    # 2. Clean messages
-    messages = _clean_transcript_messages(raw_messages)
-
-    # 3. Determine agent type
-    agent_type: str = metadata.get("agent_type", "")
-    is_fork = metadata.get("is_fork", False)
-    worktree_path = metadata.get("worktree_path")
-    prompt = metadata.get("prompt", "")
-    tool_use_id = metadata.get("tool_use_id", "")
-
-    # Resolve definition
-    agent_def: BaseAgentDefinition | None = None
-    if is_fork:
-        agent_def = FORK_AGENT
-    elif agent_type and agent_registry:
-        agent_def = agent_registry.get(agent_type)
-
-    if agent_def is None and agent_type:
-        logger.warning(
-            "Agent type %r not found in registry, using default", agent_type
-        )
-
-    # 4. Worktree recovery
-    if worktree_path:
-        wp = Path(worktree_path)
-        if not wp.exists():
-            logger.warning(
-                "Worktree %s no longer exists, running in parent cwd", worktree_path
-            )
-            worktree_path = None
-
-    # 5. Append resume notice to messages
-    resume_notice = UserMessage(
-        content=(
-            "[Agent was interrupted and is now resuming. "
-            "Continue where you left off. "
-            "If you were in the middle of a task, check the current state and proceed.]"
+    # ── Step 2: Clean messages ──
+    raw_messages: list[Message] = transcript.get("messages", [])
+    resumed_messages = _filter_whitespace_only_assistant_messages(
+        _filter_orphaned_thinking_only_messages(
+            _filter_unresolved_tool_uses(raw_messages)
         )
     )
-    messages.append(resume_notice)  # type: ignore[arg-type]
 
-    # 6. Re-launch via async lifecycle
-    logger.info("Resuming agent %s (type=%s, fork=%s)", agent_id, agent_type, is_fork)
+    # ── Step 3: Validate worktree ──
+    resumed_worktree_path: str | None = None
+    if meta and meta.get("worktreePath"):
+        wt_path = meta["worktreePath"]
+        if os.path.isdir(wt_path):
+            resumed_worktree_path = wt_path
+            # Bump mtime so stale-worktree cleanup doesn't delete a just-resumed worktree
+            now = time.time()
+            try:
+                os.utime(wt_path, (now, now))
+            except OSError:
+                pass
+        else:
+            logger.debug(
+                "Resumed worktree %s no longer exists; falling back to parent cwd",
+                wt_path,
+            )
 
-    await run_async_agent_lifecycle(
+    # ── Step 4: Resolve agent definition ──
+    is_resumed_fork = False
+    if meta and meta.get("agentType") == FORK_AGENT.agent_type:
+        selected_agent: BaseAgentDefinition = FORK_AGENT
+        is_resumed_fork = True
+    elif meta and meta.get("agentType"):
+        agent_type = meta["agentType"]
+        found = None
+        if active_agents:
+            found = next(
+                (a for a in active_agents if a.agent_type == agent_type),
+                None,
+            )
+        selected_agent = found if found else GENERAL_PURPOSE_AGENT
+    else:
+        selected_agent = GENERAL_PURPOSE_AGENT
+
+    ui_description = (meta.get("description") if meta else None) or "(resumed)"
+
+    # ── Step 5: Fork parent system prompt ──
+    fork_parent_system_prompt: str | None = None
+    if is_resumed_fork:
+        if parent_system_prompt:
+            fork_parent_system_prompt = parent_system_prompt
+        else:
+            # Fallback: recompute from default + env.
+            # May diverge from parent's cached bytes if state changed.
+            from claude_code.constants.prompts import DEFAULT_SYSTEM_PROMPT
+
+            fork_parent_system_prompt = DEFAULT_SYSTEM_PROMPT
+
+        if not fork_parent_system_prompt:
+            raise RuntimeError(
+                "Cannot resume fork agent: unable to reconstruct parent system prompt"
+            )
+
+    # ── Step 6: Resolve model (for metadata) ──
+    config = parent_engine._config
+    resolved_agent_model = selected_agent.model or config.model
+    if resolved_agent_model == "inherit":
+        resolved_agent_model = config.model
+
+    # ── Step 7: Launch via run_async_agent_lifecycle ──
+    metadata = {
+        "prompt": prompt,
+        "resolved_agent_model": resolved_agent_model,
+        "is_built_in_agent": is_built_in_agent(selected_agent),
+        "start_time": start_time,
+        "agent_type": selected_agent.agent_type,
+        "is_async": True,
+    }
+
+    # Append continuation prompt to cleaned messages
+    resume_messages: list[Message] = [
+        *resumed_messages,
+        UserMessage(content=prompt),
+    ]
+
+    async def _make_stream(
+        abort_event: asyncio.Event | None = None,
+    ):
+        """Create the resumed agent stream."""
+        async for event in run_agent(
+            prompt=prompt,
+            parent_engine=parent_engine,
+            agent_definition=selected_agent,
+            is_async=True,
+            is_fork=is_resumed_fork,
+            parent_messages=resume_messages if is_resumed_fork else None,
+            parent_system_prompt=fork_parent_system_prompt if is_resumed_fork else None,
+            worktree_path=resumed_worktree_path,
+            abort_event=abort_event,
+            use_exact_tools=is_resumed_fork,
+        ):
+            yield event
+
+    # Run lifecycle (fire-and-forget — caller reads output file)
+    abort_event = asyncio.Event()
+
+    async def _lifecycle():
+        try:
+            await run_async_agent_lifecycle(
+                agent_id=agent_id,
+                description=ui_description,
+                make_stream=_make_stream,
+                metadata=metadata,
+                abort_event=abort_event,
+            )
+        except Exception:
+            logger.error("Resume lifecycle for %s failed", agent_id, exc_info=True)
+
+    asyncio.ensure_future(_lifecycle())
+
+    return ResumeAgentResult(
         agent_id=agent_id,
-        prompt=prompt,
-        tool_use_id=tool_use_id,
-        parent_engine=parent_engine,
-        agent_definition=agent_def,
-        is_fork=is_fork,
-        worktree_path=worktree_path,
-        initial_messages=messages,
+        description=ui_description,
+        output_file=_get_task_output_path(agent_id),
     )

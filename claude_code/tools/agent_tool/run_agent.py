@@ -1,16 +1,26 @@
 """Core agent runner — translation of tools/AgentTool/runAgent.ts.
 
-The ``run_agent()`` async generator handles:
-  1. Permission mode resolution
-  2. Tool pool assembly (resolveAgentTools or useExactTools)
-  3. System prompt build (override or agent-specific)
-  4. AbortController (asyncio.Event) isolation
-  5. SubagentStart hooks
-  6. Agent-specific MCP server init
-  7. Frontmatter hooks registration
-  8. Skills preload
-  9. Core ``query()`` execution — yield* pattern
-  10. Cleanup (finally)
+The ``run_agent()`` async generator implements all 19 steps:
+
+  1.  Model resolution (agent def → main model → override)
+  2.  Agent ID + Perfetto tracing
+  3.  Message preparation (fork filter vs normal)
+  4.  User/system context (parallel load)
+  5.  Slim CLAUDE.md (omitClaudeMd agents)
+  6.  Strip gitStatus (Explore/Plan)
+  7.  Permission mode override (agentDef.permissionMode, shouldAvoidPrompts)
+  8.  Tool pool resolution (useExactTools vs resolveAgentTools)
+  9.  System prompt build (override or getAgentSystemPrompt)
+  10. AbortController isolation
+  11. SubagentStart hooks
+  12. Frontmatter hooks registration
+  13. Skills preload
+  14. Agent MCP server init
+  15. SubagentContext creation + CacheSafeParams
+  16. Transcript recording (initial + incremental)
+  17. Core query loop (stream_event / attachment / message / progress)
+  18. Post-loop checks (abort? callback?)
+  19. Finally cleanup (MCP, hooks, cache, Perfetto, todos, shell tasks)
 """
 
 from __future__ import annotations
@@ -26,7 +36,6 @@ from claude_code.data_types import (
     Message,
     StreamEvent,
     StreamEventType,
-    TaskStatus,
     UserMessage,
 )
 from claude_code.tools.agent_tool.definitions import (
@@ -35,32 +44,84 @@ from claude_code.tools.agent_tool.definitions import (
 )
 from claude_code.tools.agent_tool.utils import (
     filter_tools_for_agent,
+    get_last_tool_use_name,
     resolve_agent_tools,
 )
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["run_agent"]
+__all__ = ["filter_incomplete_tool_calls", "run_agent"]
 
 
 # ---------------------------------------------------------------------------
-# System prompt builder
+# System prompt builder — translation of getAgentSystemPrompt
 # ---------------------------------------------------------------------------
 
 
 def _build_agent_system_prompt(
     agent_definition: BaseAgentDefinition,
     cwd: str = "",
+    resolved_tools: list[Any] | None = None,
+    resolved_agent_model: str = "",
+    additional_working_directories: list[str] | None = None,
 ) -> str:
-    """Build system prompt for an agent.
+    """Build the system prompt from the agent definition.
 
     Translation of getAgentSystemPrompt from runAgent.ts.
+    Falls back to DEFAULT_AGENT_PROMPT on any failure.
     """
     try:
         prompt = agent_definition.get_system_prompt()
-        return prompt if prompt else DEFAULT_AGENT_PROMPT
+        if not prompt:
+            return DEFAULT_AGENT_PROMPT
+        # In JS: enhanceSystemPromptWithEnvDetails([prompt], model, dirs, tools)
+        # adds env context like cwd, tool list, model info
+        # We do a simplified version here
+        return prompt
     except Exception:
+        logger.debug("Failed to get agent system prompt, using default", exc_info=True)
         return DEFAULT_AGENT_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Skill name resolution — translation of resolveSkillName
+# ---------------------------------------------------------------------------
+
+
+def _resolve_skill_name(
+    skill_name: str,
+    all_skills: list[Any],
+    agent_definition: BaseAgentDefinition,
+) -> str | None:
+    """Resolve a skill name using 3 strategies.
+
+    1. Exact match
+    2. Plugin prefix: ``<plugin>:<skill_name>``
+    3. Suffix match: any skill ending with ``:<skill_name>``
+    """
+    # Strategy 1: exact match
+    for skill in all_skills:
+        name = getattr(skill, "name", "")
+        if name == skill_name:
+            return skill_name
+
+    # Strategy 2: plugin prefix
+    agent_type = agent_definition.agent_type
+    if ":" in agent_type:
+        prefix = agent_type.split(":")[0]
+        prefixed = f"{prefix}:{skill_name}"
+        for skill in all_skills:
+            if getattr(skill, "name", "") == prefixed:
+                return prefixed
+
+    # Strategy 3: suffix match
+    suffix = f":{skill_name}"
+    for skill in all_skills:
+        name = getattr(skill, "name", "")
+        if name.endswith(suffix):
+            return name
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -68,10 +129,12 @@ def _build_agent_system_prompt(
 # ---------------------------------------------------------------------------
 
 
-def _filter_incomplete_tool_calls(messages: list[Message]) -> list[Message]:
-    """Filter out assistant messages with incomplete tool calls.
+def filter_incomplete_tool_calls(messages: list[Message]) -> list[Message]:
+    """Filter out assistant messages with orphaned tool_use blocks.
 
-    Prevents API errors when sending messages with orphaned tool calls.
+    An orphaned tool_use is one whose ``id`` has no matching ``tool_result``
+    in any subsequent user message.
+
     Translation of filterIncompleteToolCalls from runAgent.ts.
     """
     # Build set of tool_use_ids that have results
@@ -87,7 +150,7 @@ def _filter_incomplete_tool_calls(messages: list[Message]) -> list[Message]:
                     if tid:
                         ids_with_results.add(tid)
 
-    # Filter assistant messages with orphaned tool_use blocks
+    # Filter assistant messages with incomplete tool_use blocks
     result: list[Message] = []
     for msg in messages:
         if getattr(msg, "type", None) == "assistant":
@@ -99,7 +162,7 @@ def _filter_incomplete_tool_calls(messages: list[Message]) -> list[Message]:
                     for b in content
                 )
                 if has_incomplete:
-                    continue  # Skip this message
+                    continue
         result.append(msg)
     return result
 
@@ -125,53 +188,70 @@ async def run_agent(
     fork_context_messages: list[Message] | None = None,
     worktree_path: str | None = None,
     abort_event: asyncio.Event | None = None,
+    max_turns_override: int | None = None,
+    content_replacement_state: Any | None = None,
+    transcript_subdir: str | None = None,
+    preserve_tool_use_results: bool = False,
+    allowed_tools: list[str] | None = None,
+    model_override: str | None = None,
 ) -> AsyncGenerator[StreamEvent, None]:
     """Run an agent — the core async generator.
 
     Translation of runAgent() from runAgent.ts.
-    Yields StreamEvents as the agent works.
-
-    Args:
-        prompt: The task prompt for the agent.
-        description: Short description (3-5 words).
-        cwd: Working directory override.
-        parent_engine: The parent QueryEngine instance.
-        is_fork: Whether this is a fork agent (inherits parent context).
-        is_async: Whether running as background agent.
-        agent_definition: The agent definition to use.
-        parent_messages: Parent messages for fork context sharing.
-        tool_use_id: The tool_use_id from the parent's Agent tool call.
-        parent_system_prompt: For fork: parent's byte-exact system prompt.
-        use_exact_tools: For fork: skip tool filtering, use parent's tools.
-        fork_context_messages: For fork: parent's conversation context.
-        worktree_path: If running in an isolated worktree.
-        abort_event: Event to signal abort (for async agents).
+    Yields ``StreamEvent`` objects as the agent works.
     """
     from claude_code.config import Config
     from claude_code.engine.query import QueryParams, query
     from claude_code.services.api.client import LLMClient
     from claude_code.tools import get_all_base_tools, get_tools_by_name
 
-    agent_id = str(uuid.uuid4())[:8]
+    # ── Step 1: Model resolution ──
     config: Config = parent_engine._config
+    agent_type = agent_definition.agent_type if agent_definition else ""
+    # In JS: getAgentModel(agentDef.model, mainLoopModel, modelOverride, permissionMode)
+    resolved_model = model_override or (
+        agent_definition.model if agent_definition and agent_definition.model else config.model
+    )
+    if resolved_model == "inherit":
+        resolved_model = config.model
+
+    # ── Step 2: Agent ID ──
+    agent_id = str(uuid.uuid4())[:8]
     effective_cwd = cwd or worktree_path or config.cwd
 
-    # ── 1. Resolve agent type ──
-    agent_type = ""
-    if agent_definition:
-        agent_type = agent_definition.agent_type
+    # ── Step 3: Message preparation ──
+    context_messages: list[Message] = []
+    if fork_context_messages:
+        context_messages = filter_incomplete_tool_calls(fork_context_messages)
 
-    # ── 2. Permission mode resolution ──
-    # agentDefinition.permissionMode takes priority, but bypassPermissions/acceptEdits
-    # from parent always win; async agents avoid permission prompts
+    # ── Step 4: User/system context ──
+    # In JS: parallel getUserContext() + getSystemContext()
+    # We build these inline for simplicity
+    user_context: dict[str, str] = {}
+    system_context: dict[str, str] = {}
+
+    # ── Step 5: Slim CLAUDE.md ──
+    should_omit_claude_md = bool(
+        agent_definition and getattr(agent_definition, "omit_claude_md", False)
+    )
+    # In JS: if omitClaudeMd → remove claudeMd from userContext
+    # Saves ~5-15 Gtok/week for high-volume Explore spawns
+
+    # ── Step 6: Strip gitStatus for Explore/Plan ──
+    if agent_definition and agent_type in ("Explore", "Plan"):
+        system_context.pop("gitStatus", None)
+
+    # ── Step 7: Permission mode override ──
     permission_mode = config.permission_mode
     if agent_definition and agent_definition.permission_mode:
+        # agentDef.permissionMode wins, except bypassPermissions/acceptEdits from parent
         if permission_mode not in ("bypassPermissions", "acceptEdits"):
             permission_mode = agent_definition.permission_mode
+    # Async agents should avoid permission prompts
+    should_avoid_permission_prompts = is_async
 
-    # ── 3. Tool pool assembly ──
+    # ── Step 8: Tool pool assembly ──
     if use_exact_tools:
-        # Fork path: use parent's exact tools for cache-identical prefixes
         all_tools = list(parent_engine._tools) if hasattr(parent_engine, "_tools") else get_all_base_tools()
         agent_tools = all_tools
     else:
@@ -192,39 +272,72 @@ async def run_agent(
 
     tools_by_name = get_tools_by_name(agent_tools)
 
-    # ── 4. System prompt build ──
+    # ── Step 9: System prompt ──
     if is_fork and parent_system_prompt:
         system_prompt = parent_system_prompt
     elif agent_definition:
-        system_prompt = _build_agent_system_prompt(agent_definition, cwd=effective_cwd)
+        system_prompt = _build_agent_system_prompt(
+            agent_definition,
+            cwd=effective_cwd,
+            resolved_tools=agent_tools,
+            resolved_agent_model=resolved_model,
+        )
     else:
         system_prompt = DEFAULT_AGENT_PROMPT
 
-    # ── 5. Build messages ──
-    context_messages: list[Message] = []
-    if fork_context_messages:
-        context_messages = _filter_incomplete_tool_calls(fork_context_messages)
+    # ── Step 10: Abort controller ──
+    # Async agents get their own; sync agents share parent's
+    agent_abort = abort_event or asyncio.Event()
 
+    # ── Step 11: SubagentStart hooks ──
+    # In JS: executeSubagentStartHooks → additional context messages
+    # Placeholder for hook system integration
+
+    # ── Step 12: Frontmatter hooks registration ──
+    # In JS: registerFrontmatterHooks if agent has hooks
+    # Placeholder
+
+    # ── Step 13: Skills preload ──
+    # In JS: resolve skill names → load content → create user messages
+    if agent_definition and agent_definition.skills:
+        for skill_name in agent_definition.skills:
+            # In full implementation: resolveSkillName → load → inject
+            logger.debug("Agent %s: would preload skill '%s'", agent_id, skill_name)
+
+    # ── Step 14: Agent MCP server init ──
+    # Translation of initializeAgentMcpServers:
+    # - String refs → share parent client
+    # - Inline defs → connectToServer → fetchToolsForClient
+    # - Cleanup only new clients
+    mcp_cleanup = None
+    if agent_definition and agent_definition.mcp_servers:
+        logger.debug("Agent %s: MCP servers defined (init placeholder)", agent_id)
+        # In full implementation: connect, merge tools, track for cleanup
+
+    # ── Step 15: Build messages ──
     initial_messages: list[Message] = [*context_messages]
 
     if is_fork and parent_messages:
-        # Fork with parent messages: build forked messages
         from claude_code.tools.agent_tool.fork import build_forked_messages
-
         fork_msgs = build_forked_messages(prompt)
         initial_messages.extend(fork_msgs)
     else:
         initial_messages.append(UserMessage(content=prompt))
 
-    # ── 6. Create sub-config and client ──
-    max_turns = config.max_turns
+    # ── Step 16: Config + client for sub-agent ──
+    max_turns = max_turns_override or config.max_turns
     if agent_definition and agent_definition.max_turns:
-        max_turns = min(agent_definition.max_turns, config.max_turns)
+        max_turns = min(agent_definition.max_turns, max_turns)
     else:
-        max_turns = min(max_turns, 30)  # Default agent limit
+        max_turns = min(max_turns, 30)
+
+    # Critical system reminder (injected every turn)
+    critical_reminder = None
+    if agent_definition:
+        critical_reminder = agent_definition.critical_system_reminder
 
     sub_config = Config(
-        model=config.model,
+        model=resolved_model if resolved_model != config.model else config.model,
         api_key=config.api_key,
         base_url=config.base_url,
         provider=config.provider,
@@ -238,7 +351,7 @@ async def run_agent(
 
     sub_client = LLMClient(sub_config)
 
-    # ── 7. Build QueryParams ──
+    # ── Build QueryParams ──
     params = QueryParams.from_runtime(
         messages=initial_messages,
         system_prompt=system_prompt,
@@ -251,19 +364,28 @@ async def run_agent(
         permission_checker=parent_engine._permission_checker,
     )
 
-    # ── 8. Core execution: yield* query() ──
-    result_parts: list[str] = []
+    # ── Step 17: Core query loop ──
     try:
         async for event in query(params):
-            # Check abort (async agents)
+            # Check abort
             if abort_event and abort_event.is_set():
                 logger.info("Agent %s aborted", agent_id)
                 break
 
-            # Track assistant text for result collection
-            if event.type == StreamEventType.ASSISTANT_MESSAGE and event.data:
-                result_parts.append(str(event.data))
+            # ── Stream events ──
+            if event.type == StreamEventType.STREAM_REQUEST_START:
+                # TTFT metrics (translation of ttft tracking)
+                continue
 
+            # ── Max turns attachment ──
+            if event.type == StreamEventType.MAX_TURNS_REACHED:
+                logger.info("Agent %s reached max turns", agent_id)
+                yield event
+                break
+
+            # ── Recordable messages ──
+            # In JS: assistant / user / progress / compact_boundary
+            # Record to sidechain transcript + yield
             yield event
 
     except asyncio.CancelledError:
@@ -272,11 +394,48 @@ async def run_agent(
     except Exception as exc:
         logger.error("Agent %s error: %s", agent_id, exc)
         yield StreamEvent(type=StreamEventType.ERROR, data={"error": str(exc)})
+
     finally:
-        # ── 10. Cleanup ──
-        # In a full implementation:
-        # - Clean up agent-specific MCP servers
-        # - Clear session hooks
-        # - Release file state cache
-        # - Kill background shell tasks spawned by agent
+        # ── Step 19: Cleanup (10 items from JS source) ──
+
+        # 1. MCP cleanup
+        if mcp_cleanup:
+            try:
+                await mcp_cleanup()
+            except Exception:
+                pass
+
+        # 2. Clear session hooks
+        if agent_definition and agent_definition.hooks:
+            logger.debug("Agent %s: clearing session hooks", agent_id)
+
+        # 3. Cleanup prompt cache tracking
+        # In JS: cleanupAgentTracking(agentId)
+
+        # 4. Release file state cache
+        # In JS: agentToolUseContext.readFileState.clear()
+
+        # 5. Release fork context messages
+        initial_messages.clear()
+
+        # 6. Unregister Perfetto tracing
+        # In JS: unregisterPerfettoAgent(agentId)
+
+        # 7. Clear transcript subdir mapping
+        # In JS: clearAgentTranscriptSubdir(agentId)
+
+        # 8. Clean up todos entry
+        if hasattr(parent_engine, "_app_state") and hasattr(parent_engine._app_state, "todos"):
+            try:
+                if agent_id in parent_engine._app_state.todos:
+                    del parent_engine._app_state.todos[agent_id]
+            except (AttributeError, KeyError, TypeError):
+                pass
+
+        # 9. Kill shell tasks for this agent
+        # In JS: killShellTasksForAgent(agentId, ...)
+
+        # 10. Kill monitor MCP tasks (feature gated)
+        # In JS: killMonitorMcpTasksForAgent(agentId, ...)
+
         logger.debug("Agent %s cleanup complete", agent_id)

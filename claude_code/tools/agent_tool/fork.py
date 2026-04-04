@@ -1,12 +1,21 @@
 """Fork subagent — translation of tools/AgentTool/forkSubagent.ts.
 
-Fork is a prompt-cache optimization strategy: fork children inherit the parent's
-full conversation context and system prompt, producing byte-identical API request
-prefixes for cache hits across parallel children.
+Fork is a prompt-cache optimisation: children inherit the parent's full
+conversation context and system prompt, producing byte-identical API request
+prefixes for maximum KV-cache sharing across parallel children.
+
+Key exports:
+  - ``is_fork_subagent_enabled()`` — feature gate
+  - ``FORK_AGENT`` — synthetic built-in definition
+  - ``is_in_fork_child()`` — recursive fork guard
+  - ``build_forked_messages()`` — cache-optimal message building
+  - ``build_child_message()`` — 10-rule directive wrapper
+  - ``build_worktree_notice()`` — worktree isolation notice
 """
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Any
 
@@ -21,12 +30,46 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "FORK_AGENT",
     "FORK_BOILERPLATE_TAG",
+    "FORK_DIRECTIVE_PREFIX",
+    "FORK_PLACEHOLDER_RESULT",
     "FORK_SUBAGENT_TYPE",
     "build_child_message",
     "build_forked_messages",
     "build_worktree_notice",
+    "is_fork_subagent_enabled",
     "is_in_fork_child",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Feature gate
+# ---------------------------------------------------------------------------
+
+
+def is_fork_subagent_enabled() -> bool:
+    """Check if the fork subagent experiment is active.
+
+    When enabled:
+      - ``subagent_type`` becomes optional
+      - Omitting it triggers an implicit fork
+      - All agent spawns run in the background
+
+    Mutually exclusive with coordinator mode and non-interactive sessions.
+    """
+    import os
+
+    # Env-var override for local testing
+    if os.environ.get("CLAUDE_FORK_SUBAGENT", "").lower() == "true":
+        try:
+            from claude_code.coordinator.coordinator_mode import is_coordinator_mode
+            if is_coordinator_mode():
+                return False
+        except ImportError:
+            pass
+        return True
+
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -36,6 +79,7 @@ FORK_BOILERPLATE_TAG = "fork-boilerplate"
 FORK_DIRECTIVE_PREFIX = "Your directive: "
 FORK_SUBAGENT_TYPE = "fork"
 FORK_PLACEHOLDER_RESULT = "Fork started — processing in background"
+
 
 # ---------------------------------------------------------------------------
 # Fork agent synthetic definition
@@ -48,7 +92,7 @@ FORK_AGENT = BuiltInAgentDefinition(
         "via subagent_type; triggered by omitting subagent_type when the fork "
         "experiment is active."
     ),
-    tools=["*"],
+    tools=["*"],   # useExactTools → inherits parent's exact tool pool
     max_turns=200,
     model="inherit",
     permission_mode="bubble",
@@ -67,14 +111,25 @@ FORK_AGENT._get_system_prompt = lambda **_kwargs: ""
 def is_in_fork_child(messages: list[Message]) -> bool:
     """Detect whether we are inside a fork child (prevent recursive forking).
 
-    Scans user messages for the fork boilerplate tag.
+    Scans user messages for the ``<fork-boilerplate>`` tag.
     """
+    tag = f"<{FORK_BOILERPLATE_TAG}>"
     for msg in messages:
         if not isinstance(msg, UserMessage):
             continue
-        content = msg.content if isinstance(msg.content, str) else ""
-        if f"<{FORK_BOILERPLATE_TAG}>" in content:
-            return True
+        content = msg.content
+        if isinstance(content, str):
+            if tag in content:
+                return True
+        elif isinstance(content, list):
+            for block in content:
+                text = ""
+                if isinstance(block, dict):
+                    text = block.get("text", "")
+                elif hasattr(block, "text"):
+                    text = getattr(block, "text", "")
+                if tag in text:
+                    return True
     return False
 
 
@@ -83,52 +138,72 @@ def is_in_fork_child(messages: list[Message]) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def build_forked_messages(directive: str, assistant_message: Any = None) -> list[Message]:
-    """Build the forked conversation messages for the child agent.
+def build_forked_messages(
+    directive: str,
+    assistant_message: Any = None,
+) -> list[Message]:
+    """Build forked conversation messages for byte-identical prefixes.
 
-    For prompt cache sharing, all fork children must produce byte-identical
-    API request prefixes. The directive is appended as the only differing part.
+    For prompt cache sharing all fork children must produce identical API
+    request prefixes.  This function:
 
-    If ``assistant_message`` is provided (has ``message.content`` with tool_use blocks),
-    we build proper tool_result placeholders + directive like the TS original.
-    Otherwise falls back to a simple user message with the fork boilerplate.
+      1. Keeps the full parent assistant message (all tool_use, thinking, text)
+      2. Builds a single user message with ``tool_result`` blocks (identical
+         placeholder) for every ``tool_use``, then appends a per-child directive
+
+    Result: ``[assistant(all_tool_uses), user(placeholder_results..., directive)]``
+    Only the final text block differs per child → maximum cache hits.
     """
     child_text = build_child_message(directive)
 
     if assistant_message is not None:
-        # Try to extract tool_use blocks for proper fork structure
         try:
             content = assistant_message.message.content
             if isinstance(content, list):
-                tool_use_blocks = [b for b in content if getattr(b, "type", None) == "tool_use"]
+                tool_use_blocks = [
+                    b for b in content
+                    if getattr(b, "type", None) == "tool_use"
+                ]
                 if tool_use_blocks:
-                    # Build tool_result blocks with identical placeholders
-                    tool_results = [
+                    full_assistant = copy.copy(assistant_message)
+
+                    # Byte-identical placeholder tool_results
+                    tool_result_blocks: list[dict[str, Any]] = [
                         {
                             "type": "tool_result",
-                            "tool_use_id": b.id,
+                            "tool_use_id": getattr(b, "id", ""),
                             "content": [{"type": "text", "text": FORK_PLACEHOLDER_RESULT}],
                         }
                         for b in tool_use_blocks
                     ]
-                    # Return assistant + user(tool_results + directive)
+
+                    user_content: list[dict[str, Any]] = [
+                        *tool_result_blocks,
+                        {"type": "text", "text": child_text},
+                    ]
+
                     return [
-                        assistant_message,
-                        UserMessage(content=child_text),
+                        full_assistant,
+                        UserMessage(content=user_content),
                     ]
         except (AttributeError, TypeError):
             pass
 
-    # Fallback: simple user message with fork boilerplate
+    # Fallback: no tool_use blocks
+    logger.warning(
+        "No tool_use blocks in assistant message for fork: %s...",
+        directive[:50],
+    )
     return [UserMessage(content=child_text)]
 
 
 def build_child_message(directive: str) -> str:
-    """Build the fork child's directive message.
+    """Build the fork child's directive with 10 non-negotiable rules.
 
     Translation of buildChildMessage from forkSubagent.ts.
     """
-    return f"""<{FORK_BOILERPLATE_TAG}>
+    return f"""\
+<{FORK_BOILERPLATE_TAG}>
 STOP. READ THIS FIRST.
 
 You are a forked worker process. You are NOT the main agent.
@@ -161,7 +236,7 @@ Output format (plain text labels, not markdown headers):
 
 
 def build_worktree_notice(parent_cwd: str, worktree_cwd: str) -> str:
-    """Notice injected into fork children running in an isolated worktree."""
+    """Isolation notice injected into fork children in a git worktree."""
     return (
         f"You've inherited the conversation context above from a parent agent working "
         f"in {parent_cwd}. You are operating in an isolated git worktree at "

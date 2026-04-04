@@ -1,7 +1,10 @@
 """Agent definitions — translation of tools/AgentTool/loadAgentsDir.ts.
 
-Defines the AgentDefinition type hierarchy (built-in, custom, plugin)
-and loading from Markdown / JSON / directories.
+Defines the ``AgentDefinition`` type hierarchy (built-in, custom, plugin)
+and loading/parsing from Markdown frontmatter, JSON, and directory trees.
+
+Priority order (later overrides earlier for the same ``agent_type``):
+  built-in → plugin → userSettings → projectSettings → flagSettings → policySettings
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Callable
 
-from pydantic import ConfigDict, Field
+from pydantic import Field
 
 from claude_code.data_types import AgentModel
 from claude_code.pydantic_models import FrozenModel, MutableModel
@@ -30,13 +33,19 @@ __all__ = [
     "BuiltInAgentDefinition",
     "CustomAgentDefinition",
     "IsolationMode",
+    "PluginAgentDefinition",
+    "clear_agent_definitions_cache",
     "filter_agents_by_mcp_requirements",
     "get_active_agents_from_list",
     "get_agent_definitions_with_overrides",
     "has_required_mcp_servers",
+    "initialize_agent_memory_snapshots",
     "is_built_in_agent",
     "is_custom_agent",
+    "is_plugin_agent",
+    "parse_agent_from_json",
     "parse_agent_from_markdown",
+    "parse_agents_from_json",
 ]
 
 
@@ -46,7 +55,7 @@ __all__ = [
 
 
 class AgentSource(StrEnum):
-    """Where the agent definition came from — priority order (later overrides)."""
+    """Where the agent definition came from — priority order."""
 
     BUILT_IN = "built-in"
     PLUGIN = "plugin"
@@ -54,6 +63,7 @@ class AgentSource(StrEnum):
     PROJECT_SETTINGS = "projectSettings"
     FLAG_SETTINGS = "flagSettings"
     POLICY_SETTINGS = "policySettings"
+    LOCAL_SETTINGS = "localSettings"
 
 
 class IsolationMode(StrEnum):
@@ -70,6 +80,7 @@ class AgentColorName(StrEnum):
     PURPLE = "purple"
     CYAN = "cyan"
     ORANGE = "orange"
+    PINK = "pink"
 
 
 # Valid permission modes (mirrors TS PermissionMode)
@@ -79,6 +90,7 @@ PERMISSION_MODES = frozenset({
     "bypassPermissions",
     "plan",
     "bubble",
+    "dontAsk",
 })
 
 # Valid effort levels
@@ -91,7 +103,10 @@ EFFORT_LEVELS = frozenset({"low", "medium", "high"})
 
 
 class BaseAgentDefinition(MutableModel):
-    """Common fields for all agent definitions."""
+    """Common fields for all agent definitions.
+
+    Mirrors ``BaseAgentDefinition`` from loadAgentsDir.ts.
+    """
 
     agent_type: str
     when_to_use: str = ""
@@ -107,11 +122,13 @@ class BaseAgentDefinition(MutableModel):
     max_turns: int | None = None
     filename: str | None = None
     base_dir: str | None = None
+    critical_system_reminder: str | None = None  # criticalSystemReminder_EXPERIMENTAL
     required_mcp_servers: list[str] | None = None
     background: bool = False
     initial_prompt: str | None = None
     memory: AgentMemoryScope | None = None
     isolation: IsolationMode | None = None
+    pending_snapshot_update: bool = False
     omit_claude_md: bool = False
     source: AgentSource = AgentSource.BUILT_IN
 
@@ -134,13 +151,13 @@ class BuiltInAgentDefinition(BaseAgentDefinition):
 
 
 class CustomAgentDefinition(BaseAgentDefinition):
-    """Custom agents from user/project/policy settings — prompt stored via closure."""
+    """Custom agents from user/project/policy settings."""
 
     pass
 
 
 class PluginAgentDefinition(BaseAgentDefinition):
-    """Plugin agents — similar to custom but with plugin metadata."""
+    """Plugin agents — from external plugin systems."""
 
     source: AgentSource = AgentSource.PLUGIN
     plugin: str = ""
@@ -163,6 +180,10 @@ def is_custom_agent(agent: BaseAgentDefinition) -> bool:
     return agent.source not in (AgentSource.BUILT_IN, AgentSource.PLUGIN)
 
 
+def is_plugin_agent(agent: BaseAgentDefinition) -> bool:
+    return agent.source is AgentSource.PLUGIN
+
+
 # ---------------------------------------------------------------------------
 # Result type
 # ---------------------------------------------------------------------------
@@ -182,8 +203,11 @@ class AgentDefinitionsResult(MutableModel):
 # ---------------------------------------------------------------------------
 
 
-def has_required_mcp_servers(agent: BaseAgentDefinition, available_servers: list[str]) -> bool:
-    """Check if an agent's required MCP servers are available."""
+def has_required_mcp_servers(
+    agent: BaseAgentDefinition,
+    available_servers: list[str],
+) -> bool:
+    """Check every required pattern has at least one matching server (case-insensitive)."""
     if not agent.required_mcp_servers:
         return True
     return all(
@@ -196,7 +220,6 @@ def filter_agents_by_mcp_requirements(
     agents: list[BaseAgentDefinition],
     available_servers: list[str],
 ) -> list[BaseAgentDefinition]:
-    """Filter agents by MCP server requirement availability."""
     return [a for a in agents if has_required_mcp_servers(a, available_servers)]
 
 
@@ -204,35 +227,31 @@ def filter_agents_by_mcp_requirements(
 # Active agent resolution (priority-based override)
 # ---------------------------------------------------------------------------
 
+# Source priority order — later wins for same agentType
+_SOURCE_PRIORITY: tuple[AgentSource, ...] = (
+    AgentSource.BUILT_IN,
+    AgentSource.PLUGIN,
+    AgentSource.USER_SETTINGS,
+    AgentSource.PROJECT_SETTINGS,
+    AgentSource.LOCAL_SETTINGS,
+    AgentSource.FLAG_SETTINGS,
+    AgentSource.POLICY_SETTINGS,
+)
 
-def get_active_agents_from_list(all_agents: list[BaseAgentDefinition]) -> list[BaseAgentDefinition]:
-    """Get active agents by applying priority-based overrides.
 
-    Later sources override earlier ones (same agentType):
-    built-in → plugin → userSettings → projectSettings → flagSettings → policySettings
-    """
-    groups: dict[AgentSource, list[BaseAgentDefinition]] = {
-        AgentSource.BUILT_IN: [],
-        AgentSource.PLUGIN: [],
-        AgentSource.USER_SETTINGS: [],
-        AgentSource.PROJECT_SETTINGS: [],
-        AgentSource.FLAG_SETTINGS: [],
-        AgentSource.POLICY_SETTINGS: [],
-    }
+def get_active_agents_from_list(
+    all_agents: list[BaseAgentDefinition],
+) -> list[BaseAgentDefinition]:
+    """Deduplicate agents by type — higher-priority source wins."""
+    groups: dict[AgentSource, list[BaseAgentDefinition]] = {s: [] for s in _SOURCE_PRIORITY}
+
     for agent in all_agents:
         group = groups.get(agent.source)
         if group is not None:
             group.append(agent)
 
     agent_map: dict[str, BaseAgentDefinition] = {}
-    for source in (
-        AgentSource.BUILT_IN,
-        AgentSource.PLUGIN,
-        AgentSource.USER_SETTINGS,
-        AgentSource.PROJECT_SETTINGS,
-        AgentSource.FLAG_SETTINGS,
-        AgentSource.POLICY_SETTINGS,
-    ):
+    for source in _SOURCE_PRIORITY:
         for agent in groups[source]:
             agent_map[agent.agent_type] = agent
 
@@ -240,14 +259,48 @@ def get_active_agents_from_list(all_agents: list[BaseAgentDefinition]) -> list[B
 
 
 # ---------------------------------------------------------------------------
-# Frontmatter parser (simple key:value, avoids PyYAML dependency)
+# Memory snapshot initialization
+# ---------------------------------------------------------------------------
+
+
+def initialize_agent_memory_snapshots(
+    agents: list[CustomAgentDefinition],
+    *,
+    cwd: str = "",
+) -> None:
+    """Initialize memory snapshots for agents with ``memory == 'user'``.
+
+    Translation of initializeAgentMemorySnapshots from loadAgentsDir.ts.
+    """
+    from claude_code.tools.agent_tool.agent_memory_snapshot import (
+        check_agent_memory_snapshot,
+        initialize_from_snapshot,
+    )
+
+    for agent in agents:
+        if agent.memory != AgentMemoryScope.USER:
+            continue
+        try:
+            action, ts = check_agent_memory_snapshot(
+                agent.agent_type, agent.memory, cwd=cwd,
+            )
+            if action == "initialize" and ts:
+                initialize_from_snapshot(agent.agent_type, agent.memory, ts, cwd=cwd)
+            elif action == "prompt-update" and ts:
+                agent.pending_snapshot_update = True
+        except Exception as exc:
+            logger.debug("Snapshot init failed for %s: %s", agent.agent_type, exc)
+
+
+# ---------------------------------------------------------------------------
+# Frontmatter parser
 # ---------------------------------------------------------------------------
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
 def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
-    """Parse YAML frontmatter from a markdown file."""
+    """Parse YAML frontmatter from markdown (avoids PyYAML dependency)."""
     match = _FRONTMATTER_RE.match(content)
     if not match:
         return {}, content
@@ -262,10 +315,12 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     for line in fm_text.split("\n"):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
-            current_list_key = None
+            if current_list_key:
+                fm[current_list_key] = current_list
+                current_list_key = None
+                current_list = []
             continue
 
-        # Detect YAML list items (e.g., "  - Read")
         if current_list_key and line.startswith("  ") and stripped.startswith("- "):
             item = stripped[2:].strip().strip("'\"")
             if item:
@@ -281,13 +336,11 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
             key = key.strip()
             value = value.strip()
 
-            # Empty value → start of a list
             if not value:
                 current_list_key = key
                 current_list = []
                 continue
 
-            # Inline list [a, b, c]
             if value.startswith("[") and value.endswith("]"):
                 items = [v.strip().strip("'\"") for v in value[1:-1].split(",")]
                 fm[key] = [i for i in items if i]
@@ -302,7 +355,6 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
             else:
                 fm[key] = value
 
-    # Flush any trailing list
     if current_list_key:
         fm[current_list_key] = current_list
 
@@ -315,7 +367,6 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
 
 
 def _parse_tools_from_frontmatter(raw: Any) -> list[str] | None:
-    """Parse tools field from frontmatter — supports list or comma-separated string."""
     if raw is None:
         return None
     if isinstance(raw, list):
@@ -339,7 +390,7 @@ def parse_agent_from_markdown(
     content: str,
     source: AgentSource,
 ) -> CustomAgentDefinition | None:
-    """Parse agent definition from markdown file data.
+    """Parse agent from markdown frontmatter + body.
 
     Translation of parseAgentFromMarkdown from loadAgentsDir.ts.
     """
@@ -349,50 +400,69 @@ def parse_agent_from_markdown(
     if not agent_type or not isinstance(agent_type, str):
         return None
     if not when_to_use or not isinstance(when_to_use, str):
-        logger.debug("Agent file %s missing 'description' in frontmatter", file_path)
+        logger.debug("Agent file %s missing 'description'", file_path)
         return None
 
-    # Unescape newlines
     when_to_use = when_to_use.replace("\\n", "\n")
 
-    # Parse optional fields
-    color = frontmatter.get("color")
+    # -- color --
+    color_raw = frontmatter.get("color")
+    color: str | None = None
+    if isinstance(color_raw, str) and color_raw in [c.value for c in AgentColorName]:
+        color = color_raw
+
+    # -- model --
     model_raw = frontmatter.get("model")
     model: str | None = None
     if isinstance(model_raw, str) and model_raw.strip():
         trimmed = model_raw.strip()
         model = "inherit" if trimmed.lower() == "inherit" else trimmed
 
+    # -- background --
     background_raw = frontmatter.get("background")
     background = background_raw is True or background_raw == "true"
 
+    # -- memory --
     memory_raw = frontmatter.get("memory")
     memory: AgentMemoryScope | None = None
     if memory_raw and memory_raw in ("user", "project", "local"):
         memory = AgentMemoryScope(memory_raw)
 
+    # -- isolation --
     isolation_raw = frontmatter.get("isolation")
     isolation: IsolationMode | None = None
     if isolation_raw == "worktree":
         isolation = IsolationMode.WORKTREE
 
+    # -- effort --
     effort = frontmatter.get("effort")
-    permission_mode_raw = frontmatter.get("permissionMode")
-    permission_mode: str | None = None
-    if permission_mode_raw and permission_mode_raw in PERMISSION_MODES:
-        permission_mode = permission_mode_raw
+    if isinstance(effort, str) and effort not in EFFORT_LEVELS:
+        logger.warning("Agent %s: invalid effort '%s'", file_path, effort)
+        effort = None
+    elif isinstance(effort, int):
+        pass
+    elif effort is not None and not isinstance(effort, str):
+        effort = None
 
-    max_turns_raw = frontmatter.get("maxTurns")
+    # -- permissionMode --
+    pm_raw = frontmatter.get("permissionMode")
+    permission_mode: str | None = None
+    if pm_raw and pm_raw in PERMISSION_MODES:
+        permission_mode = pm_raw
+
+    # -- maxTurns --
+    mt_raw = frontmatter.get("maxTurns")
     max_turns: int | None = None
-    if isinstance(max_turns_raw, int) and max_turns_raw > 0:
-        max_turns = max_turns_raw
-    elif isinstance(max_turns_raw, str) and max_turns_raw.isdigit():
-        max_turns = int(max_turns_raw) if int(max_turns_raw) > 0 else None
+    if isinstance(mt_raw, int) and mt_raw > 0:
+        max_turns = mt_raw
+    elif isinstance(mt_raw, str) and mt_raw.isdigit():
+        max_turns = int(mt_raw) if int(mt_raw) > 0 else None
 
     filename = os.path.splitext(os.path.basename(file_path))[0]
-
     tools = _parse_tools_from_frontmatter(frontmatter.get("tools"))
     disallowed_tools = _parse_tools_from_frontmatter(frontmatter.get("disallowedTools"))
+
+    # -- skills --
     skills_raw = frontmatter.get("skills")
     skills: list[str] | None = None
     if isinstance(skills_raw, list):
@@ -400,20 +470,25 @@ def parse_agent_from_markdown(
     elif isinstance(skills_raw, str):
         skills = [s.strip() for s in skills_raw.split(",") if s.strip()]
 
+    # -- mcpServers --
     mcp_servers = frontmatter.get("mcpServers")
-    if isinstance(mcp_servers, list):
-        mcp_servers = list(mcp_servers)
-    else:
+    if not isinstance(mcp_servers, list):
         mcp_servers = None
 
+    # -- hooks --
     hooks = frontmatter.get("hooks") if isinstance(frontmatter.get("hooks"), dict) else None
 
-    initial_prompt_raw = frontmatter.get("initialPrompt")
-    initial_prompt = initial_prompt_raw if isinstance(initial_prompt_raw, str) and initial_prompt_raw.strip() else None
+    # -- initialPrompt --
+    ip_raw = frontmatter.get("initialPrompt")
+    initial_prompt = ip_raw if isinstance(ip_raw, str) and ip_raw.strip() else None
 
-    # If memory is enabled, auto-inject file tools
+    # Auto-inject file tools for memory agents
     if memory and tools is not None:
-        from claude_code.tools.tool_names import FILE_EDIT_TOOL_NAME, FILE_READ_TOOL_NAME, FILE_WRITE_TOOL_NAME
+        from claude_code.tools.tool_names import (
+            FILE_EDIT_TOOL_NAME,
+            FILE_READ_TOOL_NAME,
+            FILE_WRITE_TOOL_NAME,
+        )
 
         tool_set = set(tools)
         for t in (FILE_WRITE_TOOL_NAME, FILE_EDIT_TOOL_NAME, FILE_READ_TOOL_NAME):
@@ -422,7 +497,9 @@ def parse_agent_from_markdown(
 
     system_prompt = content.strip()
 
-    def _make_prompt_fn(sp: str, mem: AgentMemoryScope | None, at: str) -> Callable[..., str]:
+    def _make_prompt_fn(
+        sp: str, mem: AgentMemoryScope | None, at: str,
+    ) -> Callable[..., str]:
         def _fn(**_kwargs: Any) -> str:
             if mem:
                 return sp + "\n\n" + load_agent_memory_prompt(at, mem)
@@ -441,7 +518,7 @@ def parse_agent_from_markdown(
         source=source,
         filename=filename,
         base_dir=base_dir,
-        color=color if color in [c.value for c in AgentColorName] else None,
+        color=color,
         model=model,
         effort=effort,
         permission_mode=permission_mode,
@@ -465,7 +542,7 @@ def parse_agent_from_json(
     definition: dict[str, Any],
     source: AgentSource = AgentSource.FLAG_SETTINGS,
 ) -> CustomAgentDefinition | None:
-    """Parse agent definition from JSON data."""
+    """Parse a single agent from JSON data."""
     try:
         description = definition.get("description", "")
         prompt = definition.get("prompt", "")
@@ -477,9 +554,12 @@ def parse_agent_from_json(
         memory_raw = definition.get("memory")
         memory = AgentMemoryScope(memory_raw) if memory_raw in ("user", "project", "local") else None
 
-        # Auto-inject file tools for memory agents
         if memory and tools is not None:
-            from claude_code.tools.tool_names import FILE_EDIT_TOOL_NAME, FILE_READ_TOOL_NAME, FILE_WRITE_TOOL_NAME
+            from claude_code.tools.tool_names import (
+                FILE_EDIT_TOOL_NAME,
+                FILE_READ_TOOL_NAME,
+                FILE_WRITE_TOOL_NAME,
+            )
 
             tool_set = set(tools)
             for t in (FILE_WRITE_TOOL_NAME, FILE_EDIT_TOOL_NAME, FILE_READ_TOOL_NAME):
@@ -488,7 +568,9 @@ def parse_agent_from_json(
 
         system_prompt = prompt
 
-        def _make_prompt_fn(sp: str, mem: AgentMemoryScope | None, at: str) -> Callable[..., str]:
+        def _make_prompt_fn(
+            sp: str, mem: AgentMemoryScope | None, at: str,
+        ) -> Callable[..., str]:
             def _fn(**_kwargs: Any) -> str:
                 if mem:
                     return sp + "\n\n" + load_agent_memory_prompt(at, mem)
@@ -509,7 +591,8 @@ def parse_agent_from_json(
             initial_prompt=definition.get("initialPrompt"),
             background=definition.get("background", False),
             memory=memory,
-            isolation=IsolationMode(definition["isolation"]) if definition.get("isolation") == "worktree" else None,
+            isolation=(IsolationMode(definition["isolation"])
+                       if definition.get("isolation") == "worktree" else None),
             mcp_servers=definition.get("mcpServers"),
             hooks=definition.get("hooks"),
         )
@@ -521,13 +604,28 @@ def parse_agent_from_json(
         return None
 
 
+def parse_agents_from_json(
+    agents_json: dict[str, Any],
+    source: AgentSource = AgentSource.FLAG_SETTINGS,
+) -> list[AgentDefinition]:
+    """Parse multiple agents from a JSON record."""
+    results: list[AgentDefinition] = []
+    for name, defn in agents_json.items():
+        if not isinstance(defn, dict):
+            continue
+        agent = parse_agent_from_json(name, defn, source)
+        if agent:
+            results.append(agent)
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Directory loading
 # ---------------------------------------------------------------------------
 
 
 def load_agents_dir(directory: str | Path) -> list[CustomAgentDefinition]:
-    """Load all agent definitions from a directory (markdown files)."""
+    """Load all markdown agent definitions from a directory."""
     directory = Path(directory)
     if not directory.is_dir():
         return []
@@ -545,11 +643,8 @@ def load_agents_dir(directory: str | Path) -> list[CustomAgentDefinition]:
                     content = entry.read_text(encoding="utf-8")
                     fm, body = _parse_frontmatter(content)
                     agent = parse_agent_from_markdown(
-                        str(entry),
-                        str(directory),
-                        fm,
-                        body,
-                        AgentSource.USER_SETTINGS,  # overridden by caller
+                        str(entry), str(directory), fm, body,
+                        AgentSource.USER_SETTINGS,
                     )
                     if agent:
                         agents.append(agent)
@@ -562,20 +657,43 @@ def load_agents_dir(directory: str | Path) -> list[CustomAgentDefinition]:
     return agents
 
 
+# ---------------------------------------------------------------------------
+# Cache for definitions
+# ---------------------------------------------------------------------------
+
+_definitions_cache: AgentDefinitionsResult | None = None
+
+
+def clear_agent_definitions_cache() -> None:
+    """Clear memoized agent definitions (call on settings change)."""
+    global _definitions_cache
+    _definitions_cache = None
+
+
 def get_agent_definitions_with_overrides(cwd: str = "") -> AgentDefinitionsResult:
     """Load agent definitions from all standard locations.
 
     Priority (later overrides earlier):
-    1. built-in agents
-    2. user agents: ~/.claude/agents/
-    3. project agents: .claude/agents/
+      1. built-in agents
+      2. user agents: ~/.claude/agents/
+      3. project agents: .claude/agents/
+
+    Results are cached (call ``clear_agent_definitions_cache()`` to reset).
     """
+    global _definitions_cache
+    if _definitions_cache is not None:
+        return _definitions_cache
+
     from claude_code.tools.agent_tool.built_in import get_built_in_agents
 
     all_agents_list: list[BaseAgentDefinition] = []
+    failed_files: list[dict[str, str]] = []
 
     # 1. Built-in
-    all_agents_list.extend(get_built_in_agents())
+    try:
+        all_agents_list.extend(get_built_in_agents())
+    except Exception as exc:
+        logger.error("Failed to load built-in agents: %s", exc)
 
     # 2. User agents
     user_dir = Path.home() / ".claude" / "agents"
@@ -583,7 +701,7 @@ def get_agent_definitions_with_overrides(cwd: str = "") -> AgentDefinitionsResul
         agent.source = AgentSource.USER_SETTINGS
         all_agents_list.append(agent)
 
-    # 3. Project agents (walk up from cwd)
+    # 3. Project agents (closest .claude/agents/ walking up from cwd)
     if cwd:
         current = Path(cwd)
         home = Path.home()
@@ -593,12 +711,36 @@ def get_agent_definitions_with_overrides(cwd: str = "") -> AgentDefinitionsResul
                 for agent in load_agents_dir(agents_dir):
                     agent.source = AgentSource.PROJECT_SETTINGS
                     all_agents_list.append(agent)
-                break  # Only the closest project dir
+                break
             current = current.parent
 
     active_agents = get_active_agents_from_list(all_agents_list)
 
-    return AgentDefinitionsResult(
+    # Initialize colours for active agents
+    from claude_code.tools.agent_tool.agent_color_manager import (
+        AGENT_COLORS,
+        set_agent_color,
+    )
+
+    color_idx = 0
+    for agent in active_agents:
+        if agent.color:
+            set_agent_color(agent.agent_type, agent.color)
+        elif agent.agent_type != "general-purpose":
+            set_agent_color(agent.agent_type, AGENT_COLORS[color_idx % len(AGENT_COLORS)].value)
+            color_idx += 1
+
+    # Initialize memory snapshots for custom agents with user-scope memory
+    custom_agents = [a for a in active_agents if is_custom_agent(a) and isinstance(a, CustomAgentDefinition)]
+    try:
+        initialize_agent_memory_snapshots(custom_agents, cwd=cwd)
+    except Exception as exc:
+        logger.debug("Memory snapshot init failed: %s", exc)
+
+    result = AgentDefinitionsResult(
         active_agents=active_agents,
         all_agents=all_agents_list,
+        failed_files=failed_files if failed_files else None,
     )
+    _definitions_cache = result
+    return result

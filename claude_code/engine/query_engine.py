@@ -7,7 +7,7 @@ Integrates permission checker, auto-compact, task manager, and usage tracking.
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 from claude_code.config import Config
 from claude_code.constants.prompts import get_system_prompt
@@ -141,44 +141,6 @@ class QueryEngine:
                 )
                 self._usage_tracker.record(usage)
             yield event
-
-    async def run_sub_agent(
-        self,
-        prompt: str,
-        description: str = "",
-        cwd: str = "",
-        is_fork: bool = False,
-        is_background: bool = False,
-        agent_definition: Any = None,
-        tool_use_id: str = "",
-    ) -> str:
-        """Run a sub-agent query — used by AgentTool.
-
-        Uses the new agent runner for fork/background/regular agent support.
-        """
-        from claude_code.agents.runner import run_agent_background, run_agent_foreground
-
-        effective_cwd = cwd or self._config.cwd
-
-        if is_background:
-            return await run_agent_background(
-                prompt=prompt,
-                description=description,
-                cwd=effective_cwd,
-                parent_engine=self,
-                agent_definition=agent_definition,
-                tool_use_id=tool_use_id,
-            )
-
-        return await run_agent_foreground(
-            prompt=prompt,
-            description=description,
-            cwd=effective_cwd,
-            parent_engine=self,
-            is_fork=is_fork,
-            agent_definition=agent_definition,
-            parent_messages=self._messages if is_fork else None,
-        )
 
     def drain_agent_notifications(self) -> list[str]:
         """Drain pending agent notifications (task-notification XML).
