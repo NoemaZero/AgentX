@@ -248,6 +248,14 @@ class _ProgressReporter:
 
 
 def pytest_configure(config: Any) -> None:
-    # Register only on master (or when not using xdist) to avoid duplicate output
+    # Register only on master (or when not using xdist) to avoid duplicate output.
+    # Guard: only register xdist hook if pytest-xdist is installed.
+    reporter = _ProgressReporter()
+    try:
+        import xdist  # noqa: F401
+    except ImportError:
+        # Remove the xdist-only hook so pluggy doesn't reject it
+        if hasattr(reporter, "pytest_xdist_node_collection_finished"):
+            delattr(reporter.__class__, "pytest_xdist_node_collection_finished")
     if not hasattr(config, "workerinput"):
-        config.pluginmanager.register(_ProgressReporter(), "progress_reporter")
+        config.pluginmanager.register(reporter, "progress_reporter")
