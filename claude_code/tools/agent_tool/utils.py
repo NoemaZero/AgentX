@@ -15,8 +15,11 @@ Contains:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import time
+from pathlib import Path
 from typing import Any, AsyncGenerator, NamedTuple
 
 from claude_code.data_types import (
@@ -479,78 +482,242 @@ async def classify_handoff_if_needed(
 # ---------------------------------------------------------------------------
 
 
+def _get_task_output_path(agent_id: str) -> str:
+    """Return the file path for an agent's output transcript.
+
+    Translation of getTaskOutputPath from utils/task/diskOutput.ts.
+    """
+    try:
+        from claude_code.utils.history import get_task_output_path
+
+        return get_task_output_path(agent_id)
+    except (ImportError, Exception):
+        return f"/tmp/agent-output-{agent_id}.jsonl"
+
+
+def _write_event_to_output(output_file: str, event: Any) -> None:
+    """Append a single event/message to the agent's JSONL output file."""
+    try:
+        os.makedirs(os.path.dirname(output_file) or "/tmp", exist_ok=True)
+        record: dict[str, Any] = {"ts": time.time()}
+        if hasattr(event, "type"):
+            record["type"] = str(event.type)
+        if hasattr(event, "data"):
+            data = event.data
+            if isinstance(data, dict):
+                record["data"] = data
+            else:
+                record["data"] = str(data)
+        elif hasattr(event, "message"):
+            msg = event.message
+            if hasattr(msg, "content"):
+                content = msg.content
+                if isinstance(content, str):
+                    record["content"] = content
+                elif isinstance(content, list):
+                    texts = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            texts.append(block.get("text", ""))
+                        elif hasattr(block, "type") and getattr(block, "type", None) == "text":
+                            texts.append(getattr(block, "text", ""))
+                    if texts:
+                        record["content"] = "\n".join(texts)
+        with open(output_file, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass  # Best-effort — never crash the agent over output logging
+
+
+def _write_final_status(
+    output_file: str,
+    status: str,
+    result: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> None:
+    """Write the final status line to the agent's output file."""
+    try:
+        record: dict[str, Any] = {
+            "ts": time.time(),
+            "type": "final_status",
+            "status": status,
+        }
+        if result:
+            content = result.get("content", [])
+            texts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    texts.append(block.get("text", ""))
+            if texts:
+                record["result"] = "\n".join(texts)
+            record["total_tokens"] = result.get("total_tokens", 0)
+            record["total_tool_use_count"] = result.get("total_tool_use_count", 0)
+            record["total_duration_ms"] = result.get("total_duration_ms", 0)
+        if error:
+            record["error"] = error
+        with open(output_file, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass
+
+
 async def run_async_agent_lifecycle(
     *,
-    task_id: str,
+    task_id: str | None = None,
+    agent_id: str | None = None,
     make_stream: Any,
     metadata: dict[str, Any],
     description: str,
     abort_controller: asyncio.Event | None = None,
+    abort_event: asyncio.Event | None = None,
     on_complete: Any | None = None,
     on_fail: Any | None = None,
     on_kill: Any | None = None,
     enable_summarization: bool = False,
     get_worktree_result: Any | None = None,
+    output_file: str | None = None,
+    task_manager: Any | None = None,
 ) -> None:
     """Drive a background agent from spawn to completion/failure/kill.
 
     Translation of runAsyncAgentLifecycle from agentToolUtils.ts.
 
     Lifecycle steps:
-      1. Create progress tracker
-      2. Iterate ``make_stream()`` messages
-      3. Update progress / AppState
-      4. On success: ``finalizeAgentTool`` → complete → classify → notify
-      5. On abort: ``killAsyncAgent`` → partial result → notify
-      6. On error: ``failAsyncAgent`` → notify
-      7. Finally: cleanup (skills, dumpState)
+      1. Register task in TaskManager (translation of registerAsyncAgent)
+      2. Create progress tracker
+      3. Iterate ``make_stream()`` messages
+      4. Update progress / TaskManager
+      5. On success: ``finalizeAgentTool`` → complete → classify → notify
+      6. On abort: ``killAsyncAgent`` → partial result → notify
+      7. On error: ``failAsyncAgent`` → notify
+      8. Finally: cleanup (skills, dumpState)
     """
-    agent_messages: list[Any] = []
-    start_time = metadata.get("start_time", time.time())
+    resolved_task_id = task_id or agent_id
+    if not resolved_task_id:
+        raise ValueError("run_async_agent_lifecycle requires `task_id` or `agent_id`")
+
+    resolved_abort_controller = abort_controller or abort_event
+
     agent_type = metadata.get("agent_type", "")
     prompt = metadata.get("prompt", "")
+    start_time = metadata.get("start_time", time.time())
+
+    # ── Step 1: Register in TaskManager (translation of registerAsyncAgent) ──
+    if task_manager is not None:
+        task_manager.register_agent(
+            agent_id=resolved_task_id,
+            description=description,
+            prompt=prompt,
+            agent_type=agent_type,
+            cwd=metadata.get("cwd", ""),
+        )
+        # Use TaskManager's abort event if available
+        tm_abort = task_manager.get_abort_event(resolved_task_id)
+        if tm_abort is not None and resolved_abort_controller is not None:
+            # Link external abort event → TaskManager abort event
+            async def _link_abort():
+                if resolved_abort_controller is not None:
+                    await asyncio.ensure_future(_wait_and_set(resolved_abort_controller, tm_abort))
+            # Use TaskManager's event as the canonical one
+            resolved_abort_controller = tm_abort
+
+    # Resolve output file path — prefer TaskManager's path, then explicit, then auto
+    if task_manager is not None:
+        resolved_output_file = task_manager.get_output_path(resolved_task_id)
+    else:
+        resolved_output_file = output_file or _get_task_output_path(resolved_task_id)
+
+    # Write initial metadata header (only if no task_manager — it writes its own)
+    if task_manager is None:
+        _write_event_to_output(resolved_output_file, type("_Event", (), {
+            "type": "agent_start",
+            "data": {
+                "agent_id": resolved_task_id,
+                "description": description,
+                "agent_type": agent_type,
+                "prompt": prompt,
+            },
+        })())
+
+    agent_messages: list[Any] = []
 
     # Summarization placeholder (would call startAgentSummarization in JS)
     stop_summarization = None
 
     try:
-        # Step 2: Message stream loop
+        # Step 3: Message stream loop
         stream = make_stream()
+        tool_use_count = 0
         async for message in stream:
             # Check abort
-            if abort_controller and abort_controller.is_set():
+            if resolved_abort_controller and resolved_abort_controller.is_set():
                 raise asyncio.CancelledError("Agent aborted")
 
             agent_messages.append(message)
 
+            # Write to output file for progress tracking
+            if task_manager is not None:
+                task_manager.append_output(resolved_task_id, {
+                    "ts": time.time(),
+                    "type": str(getattr(message, "type", "message")),
+                    "content": _extract_message_text(message),
+                })
+            else:
+                _write_event_to_output(resolved_output_file, message)
+
             # Update progress
             last_tool = get_last_tool_use_name(message)
+            tool_use_count = count_tool_uses(agent_messages)
+            if task_manager is not None:
+                task_manager.update_progress(
+                    resolved_task_id,
+                    tool_use_count=tool_use_count,
+                    token_count=len(agent_messages),
+                    last_activity=description,
+                    last_tool_name=last_tool or "",
+                )
             if last_tool:
                 emit_task_progress(
-                    task_id=task_id,
+                    task_id=resolved_task_id,
                     tool_use_id=None,
                     description=description,
                     start_time=start_time,
                     last_tool_name=last_tool,
                     token_count=len(agent_messages),
-                    tool_use_count=count_tool_uses(agent_messages),
+                    tool_use_count=tool_use_count,
                 )
 
-        # Step 3: Stop summarization
+        # Step 4: Stop summarization
         if stop_summarization:
             stop_summarization()
 
-        # Step 4: Finalize
+        # Step 5: Finalize
         result = finalize_agent_tool(
             agent_messages,
-            task_id,
+            resolved_task_id,
             prompt=prompt,
             agent_type=agent_type,
             start_time=start_time,
             is_async=True,
         )
 
-        # Complete the task — do this FIRST before classify/worktree
+        # Complete via TaskManager (translation of completeAgentTask)
+        if task_manager is not None:
+            task_manager.complete_task(resolved_task_id, result)
+            # Enqueue notification (translation of enqueueAgentNotification)
+            result_summary = ""
+            content = result.get("content", [])
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    result_summary += block.get("text", "")
+            task_manager.enqueue_notification(
+                task_id=resolved_task_id,
+                description=description,
+                status="completed",
+                message=result_summary[:2000],
+            )
+
+        # Legacy callback
         if on_complete:
             if asyncio.iscoroutinefunction(on_complete):
                 await on_complete(result)
@@ -566,7 +733,7 @@ async def run_async_agent_lifecycle(
             total_tool_use_count=result.get("total_tool_use_count", 0),
         )
         if warning:
-            logger.warning("Handoff warning for agent %s: %s", task_id, warning)
+            logger.warning("Handoff warning for agent %s: %s", resolved_task_id, warning)
 
         # Worktree result
         worktree_result = {}
@@ -576,9 +743,13 @@ async def run_async_agent_lifecycle(
             else:
                 worktree_result = get_worktree_result()
 
+        # Write final status to output file (only if no task_manager — it writes its own)
+        if task_manager is None:
+            _write_final_status(resolved_output_file, "completed", result=result)
+
         logger.info(
             "Async agent %s completed: type=%s duration=%dms",
-            task_id, agent_type, result.get("total_duration_ms", 0),
+            resolved_task_id, agent_type, result.get("total_duration_ms", 0),
         )
 
     except (asyncio.CancelledError, KeyboardInterrupt):
@@ -587,6 +758,16 @@ async def run_async_agent_lifecycle(
             stop_summarization()
 
         partial = extract_partial_result(agent_messages)
+
+        # Kill via TaskManager (translation of killAsyncAgent)
+        if task_manager is not None:
+            task_manager.kill_task(resolved_task_id)
+            task_manager.enqueue_notification(
+                task_id=resolved_task_id,
+                description=description,
+                status="killed",
+                message=partial or "",
+            )
 
         if on_kill:
             if asyncio.iscoroutinefunction(on_kill):
@@ -604,7 +785,9 @@ async def run_async_agent_lifecycle(
             except Exception:
                 pass
 
-        logger.info("Async agent %s killed", task_id)
+        if task_manager is None:
+            _write_final_status(resolved_output_file, "killed")
+        logger.info("Async agent %s killed", resolved_task_id)
 
     except Exception as exc:
         # Fail path
@@ -612,7 +795,20 @@ async def run_async_agent_lifecycle(
             stop_summarization()
 
         error_msg = str(exc)
-        logger.error("Async agent %s failed: %s", task_id, error_msg)
+
+        # Fail via TaskManager (translation of failAgentTask)
+        if task_manager is not None:
+            task_manager.fail_task(resolved_task_id, error_msg)
+            task_manager.enqueue_notification(
+                task_id=resolved_task_id,
+                description=description,
+                status="failed",
+                message=error_msg,
+            )
+        else:
+            _write_final_status(resolved_output_file, "failed", error=error_msg)
+
+        logger.error("Async agent %s failed: %s", resolved_task_id, error_msg)
 
         if on_fail:
             if asyncio.iscoroutinefunction(on_fail):
@@ -633,4 +829,29 @@ async def run_async_agent_lifecycle(
     finally:
         # Cleanup (translation of JS finally block)
         # clearInvokedSkillsForAgent, clearDumpState
-        logger.debug("Async agent %s lifecycle cleanup", task_id)
+        logger.debug("Async agent %s lifecycle cleanup", resolved_task_id)
+
+
+def _extract_message_text(message: Any) -> str:
+    """Extract readable text from a stream message for output logging."""
+    if hasattr(message, "message"):
+        msg = message.message
+        if hasattr(msg, "content"):
+            content = msg.content
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                texts = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        texts.append(block.get("text", ""))
+                    elif hasattr(block, "type") and getattr(block, "type", None) == "text":
+                        texts.append(getattr(block, "text", ""))
+                return "\n".join(texts)
+    if hasattr(message, "data"):
+        data = message.data
+        if isinstance(data, str):
+            return data
+        if isinstance(data, dict):
+            return str(data)
+    return ""

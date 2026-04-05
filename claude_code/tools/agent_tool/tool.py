@@ -51,6 +51,7 @@ from claude_code.tools.tool_names import (
 )
 
 from claude_code.tools.agent_tool.agent_color_manager import set_agent_color
+from claude_code.tools.agent_tool.built_in import GENERAL_PURPOSE_AGENT
 from claude_code.tools.agent_tool.constants import ONE_SHOT_BUILTIN_AGENT_TYPES
 from claude_code.tools.agent_tool.definitions import (
     BaseAgentDefinition,
@@ -285,22 +286,26 @@ def _resolve_agent_definition(
 
     from claude_code.tools.agent_tool.built_in import get_built_in_agents
 
+    normalized_type = subagent_type
+    if subagent_type == "GeneralPurpose":
+        normalized_type = GENERAL_PURPOSE_AGENT.agent_type
+
     # Check built-in agents first
     for defn in get_built_in_agents():
-        if defn.agent_type == subagent_type:
+        if defn.agent_type == normalized_type:
             return defn
 
     # Then check provided active_agents
     if active_agents:
         for defn in active_agents:
-            if defn.agent_type == subagent_type:
+            if defn.agent_type == normalized_type:
                 return defn
 
     # Finally check custom agents (loaded from dirs)
     try:
         all_defs = get_agent_definitions_with_overrides(cwd=cwd)
         for defn in all_defs.active_agents:
-            if defn.agent_type == subagent_type:
+            if defn.agent_type == normalized_type:
                 return defn
     except Exception:
         logger.debug("Failed to load agent definitions", exc_info=True)
@@ -390,6 +395,7 @@ class AgentTool(BaseTool):
                 type=ToolParameterType.STRING,
                 description="The type of specialized agent to use for this task",
                 required=False,
+                enum=self._get_active_agent_types(),
             ),
             ToolParameter(
                 name="model",
@@ -439,6 +445,21 @@ class AgentTool(BaseTool):
         if tool_input:
             return tool_input.get("description", "Running task")
         return "Running task"
+
+    def _get_active_agent_types(self) -> list[str]:
+        """Return the list of currently active agent type names.
+
+        Used to populate the ``subagent_type`` enum so the LLM can only
+        select agents that actually exist.
+        """
+        try:
+            all_defs = get_agent_definitions_with_overrides()
+            agents = all_defs.active_agents
+            agents = filter_agents_by_mcp_requirements(agents, [])
+            return [a.agent_type for a in agents if a.agent_type]
+        except Exception:
+            # Fallback: at minimum expose the general-purpose built-in
+            return [GENERAL_PURPOSE_AGENT.agent_type]
 
     async def check_permissions(self, tool_input: dict[str, Any]) -> PermissionResult:
         """Translation of checkPermissions — auto-approve sub-agent generation."""
@@ -514,7 +535,7 @@ class AgentTool(BaseTool):
         # Translation: effectiveType = subagent_type ?? (forkEnabled ? undefined : GENERAL_PURPOSE)
         is_fork_enabled = is_fork_subagent_enabled()
         effective_type = subagent_type if subagent_type else (
-            None if is_fork_enabled else "GeneralPurpose"
+            None if is_fork_enabled else GENERAL_PURPOSE_AGENT.agent_type
         )
         is_fork_path = effective_type is None
 
@@ -772,6 +793,9 @@ class AgentTool(BaseTool):
 
         abort_event = asyncio.Event()
 
+        # Resolve task_manager from engine (translation of registerAsyncAgent)
+        task_manager = getattr(engine, "task_manager", None)
+
         async def _make_stream():
             """Create the run_agent async generator on demand."""
             async for event in run_agent(
@@ -799,6 +823,8 @@ class AgentTool(BaseTool):
                 make_stream=_make_stream,
                 metadata=metadata,
                 abort_event=abort_event,
+                output_file=output_file,
+                task_manager=task_manager,
             )
         )
 
@@ -869,13 +895,16 @@ class AgentTool(BaseTool):
                 model_override=model_param,
             ):
                 # Collect messages for finalization
+                # Gather assistant messages, tool results, and any event
+                # carrying a .message attribute (raw API responses).
                 if hasattr(event, "type"):
                     if event.type in (
                         StreamEventType.ASSISTANT_MESSAGE,
-                        StreamEventType.USER_MESSAGE,
+                        StreamEventType.TOOL_RESULT,
                     ):
                         agent_messages.append(event)
-                # Also collect raw event data
+                        continue
+                # Also collect raw event data that carries a message payload
                 if hasattr(event, "message"):
                     agent_messages.append(event)
 

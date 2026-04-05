@@ -366,6 +366,7 @@ async def resume_agent_background(
                 make_stream=_make_stream,
                 metadata=metadata,
                 abort_event=abort_event,
+                output_file=_get_task_output_path(agent_id),
             )
         except Exception:
             logger.error("Resume lifecycle for %s failed", agent_id, exc_info=True)

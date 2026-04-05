@@ -146,10 +146,27 @@ class QueryEngine:
         """Drain pending agent notifications (task-notification XML).
 
         Called by query loop to inject background agent completions.
+        Merges from both:
+          - TaskManager (background agents registered via AgentTool)
+          - AgentRegistry (legacy path)
         """
-        from claude_code.agents.runner import get_agent_registry
+        notifications: list[str] = []
 
-        return get_agent_registry().drain_notifications()
+        # Primary: TaskManager notifications (from run_async_agent_lifecycle)
+        tm_notifications = self._task_manager.drain_notifications()
+        if tm_notifications:
+            notifications.extend(tm_notifications)
+
+        # Secondary: AgentRegistry notifications (legacy agents/runner path)
+        try:
+            from claude_code.agents.runner import get_agent_registry
+            registry_notifications = get_agent_registry().drain_notifications()
+            if registry_notifications:
+                notifications.extend(registry_notifications)
+        except ImportError:
+            pass
+
+        return notifications
 
     async def cleanup(self) -> None:
         """Clean up resources (tasks, etc.)."""

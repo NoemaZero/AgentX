@@ -177,61 +177,56 @@ class LLMClient:
         finish_reason = ""
         usage = Usage()
 
-        try:
-            stream = self._provider.invoke(
-                openai_messages,
-                tools=tools,
-                max_tokens=effective_max_tokens,
-                temperature=effective_temp,
-                stream=True,
-            )
+        stream = self._provider.invoke(
+            openai_messages,
+            tools=tools,
+            max_tokens=effective_max_tokens,
+            temperature=effective_temp,
+            stream=True,
+        )
 
-            async for ev in stream:
-                ev: StreamOutput
+        async for ev in stream:
+            ev: StreamOutput
 
-                # Usage
-                if ev.usage:
-                    usage = Usage(
-                        input_tokens=ev.usage.get("prompt_tokens", 0),
-                        output_tokens=ev.usage.get("completion_tokens", 0),
-                    )
+            # Usage
+            if ev.usage:
+                usage = Usage(
+                    input_tokens=ev.usage.get("prompt_tokens", 0),
+                    output_tokens=ev.usage.get("completion_tokens", 0),
+                )
 
-                # Finish reason
-                if ev.finish_reason:
-                    finish_reason = ev.finish_reason
+            # Finish reason
+            if ev.finish_reason:
+                finish_reason = ev.finish_reason
 
-                # Tool call deltas
-                if ev.tool_calls_delta:
-                    for tc in ev.tool_calls_delta:
-                        idx = tc["index"]
-                        if idx not in tool_calls_acc:
-                            tool_calls_acc[idx] = {
-                                "id": "",
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""},
-                            }
-                        acc = tool_calls_acc[idx]
-                        if tc.get("id"):
-                            acc["id"] = tc["id"]
-                        if tc.get("function_name"):
-                            acc["function"]["name"] = tc["function_name"]
-                        if tc.get("function_args"):
-                            acc["function"]["arguments"] += tc["function_args"]
+            # Tool call deltas
+            if ev.tool_calls_delta:
+                for tc in ev.tool_calls_delta:
+                    idx = tc["index"]
+                    if idx not in tool_calls_acc:
+                        tool_calls_acc[idx] = {
+                            "id": "",
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        }
+                    acc = tool_calls_acc[idx]
+                    if tc.get("id"):
+                        acc["id"] = tc["id"]
+                    if tc.get("function_name"):
+                        acc["function"]["name"] = tc["function_name"]
+                    if tc.get("function_args"):
+                        acc["function"]["arguments"] += tc["function_args"]
 
-                # Content / thinking deltas → yield to caller
-                if ev.answer:
-                    content_parts.append(ev.answer)
-                    yield StreamEvent(type=StreamEventType.CONTENT_DELTA, data=ev.answer)
+            # Content / thinking deltas → yield to caller
+            if ev.answer:
+                content_parts.append(ev.answer)
+                yield StreamEvent(type=StreamEventType.CONTENT_DELTA, data=ev.answer)
 
-                if ev.thinking:
-                    yield StreamEvent(type=StreamEventType.THINKING_DELTA, data=ev.thinking)
+            if ev.thinking:
+                yield StreamEvent(type=StreamEventType.THINKING_DELTA, data=ev.thinking)
 
-                if ev.thinking_snapshot:
-                    yield StreamEvent(type=StreamEventType.THINKING_END, data=ev.thinking_snapshot)
-
-        except Exception as e:
-            yield StreamEvent(type=StreamEventType.ERROR, data=str(e))
-            return
+            if ev.thinking_snapshot:
+                yield StreamEvent(type=StreamEventType.THINKING_END, data=ev.thinking_snapshot)
 
         # Build final tool_calls list
         tool_calls = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())]

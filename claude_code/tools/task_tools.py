@@ -76,14 +76,46 @@ class TaskOutputTool(BaseTool):
         if task_info is None:
             return ToolResult(data=f"Error: Task '{task_id}' not found")
 
-        if task_info.status == TaskStatus.COMPLETED:
-            return ToolResult(data=str(task_info.result or "(no output)"))
-
-        if task_info.status in (TaskStatus.FAILED, TaskStatus.KILLED):
+        # For completed/failed/killed tasks, return rich output
+        if task_info.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.KILLED):
+            detail = task_manager.get_task_detail(task_id)
+            if detail:
+                lines = [
+                    f"Task {task_id} [{detail.get('status', task_info.status)}]",
+                    f"Description: {detail.get('description', '')}",
+                    f"Duration: {detail.get('duration_ms', 0)}ms",
+                    f"Tool uses: {detail.get('tool_use_count', 0)}",
+                ]
+                if detail.get("result"):
+                    result_text = detail["result"]
+                    if isinstance(result_text, dict):
+                        result_text = task_manager._extract_result_text(result_text)
+                    lines.append(f"Result:\n{result_text}")
+                elif detail.get("error"):
+                    lines.append(f"Error: {detail['error']}")
+                return ToolResult(data="\n".join(lines))
             return ToolResult(data=f"Task {task_id} {task_info.status}: {task_info.result or '(no details)'}")
 
         block = tool_input.get("block", True)
         if not block:
+            # Return progress info for running tasks
+            detail = task_manager.get_task_detail(task_id)
+            if detail:
+                lines = [
+                    f"Task {task_id} [{detail.get('status', 'running')}]",
+                    f"Description: {detail.get('description', '')}",
+                    f"Duration: {detail.get('duration_ms', 0)}ms",
+                    f"Tool uses: {detail.get('tool_use_count', 0)}",
+                    f"Last activity: {detail.get('last_activity', '')}",
+                ]
+                # Also try reading latest output
+                output = task_manager.get_output(task_id, max_bytes=4096)
+                if output:
+                    # Show last few lines
+                    last_lines = output.strip().split("\n")[-5:]
+                    lines.append("Recent output:")
+                    lines.extend(f"  {l}" for l in last_lines)
+                return ToolResult(data="\n".join(lines))
             return ToolResult(data=f"Task {task_id} is still {task_info.status}")
 
         # Wait for completion
@@ -96,6 +128,22 @@ class TaskOutputTool(BaseTool):
                 task_manager.wait_for_task(task_id),
                 timeout=timeout_s,
             )
+            # Return rich output after wait completes
+            detail = task_manager.get_task_detail(task_id)
+            if detail:
+                lines = [
+                    f"Task {task_id} [{detail.get('status', 'completed')}]",
+                    f"Duration: {detail.get('duration_ms', 0)}ms",
+                    f"Tool uses: {detail.get('tool_use_count', 0)}",
+                ]
+                if detail.get("result"):
+                    result_text = detail["result"]
+                    if isinstance(result_text, dict):
+                        result_text = task_manager._extract_result_text(result_text)
+                    lines.append(f"Result:\n{result_text}")
+                elif detail.get("error"):
+                    lines.append(f"Error: {detail['error']}")
+                return ToolResult(data="\n".join(lines))
             return ToolResult(data=str(result or "(no output)"))
         except asyncio.TimeoutError:
             return ToolResult(data=f"Task {task_id} timed out after {timeout_ms}ms (still running)")
@@ -221,18 +269,34 @@ class TaskGetTool(BaseTool):
             return ToolResult(data="Error: Task manager not available")
 
         task_id = tool_input.get("task_id", "")
-        task_info = task_manager.get_task(task_id)
-        if task_info is None:
+        detail = task_manager.get_task_detail(task_id)
+        if detail is None:
             return ToolResult(data=f"Error: Task '{task_id}' not found")
 
         lines = [
-            f"Task ID: {task_info.task_id}",
-            f"Type: {task_info.task_type}",
-            f"Status: {task_info.status}",
-            f"Description: {task_info.description}",
+            f"Task ID: {detail.get('task_id', task_id)}",
+            f"Type: {detail.get('type', '')}",
+            f"Status: {detail.get('status', '')}",
+            f"Description: {detail.get('description', '')}",
         ]
-        if task_info.result is not None:
-            lines.append(f"Result: {task_info.result}")
+        if detail.get("agent_type"):
+            lines.append(f"Agent Type: {detail['agent_type']}")
+        lines.append(f"Duration: {detail.get('duration_ms', 0)}ms")
+        if detail.get("tool_use_count"):
+            lines.append(f"Tool Uses: {detail['tool_use_count']}")
+        if detail.get("token_count"):
+            lines.append(f"Tokens: {detail['token_count']}")
+        if detail.get("last_activity"):
+            lines.append(f"Last Activity: {detail['last_activity']}")
+        if detail.get("output_file"):
+            lines.append(f"Output File: {detail['output_file']}")
+        if detail.get("result") is not None:
+            result_val = detail["result"]
+            if isinstance(result_val, dict):
+                result_val = task_manager._extract_result_text(result_val)
+            lines.append(f"Result: {result_val}")
+        if detail.get("error"):
+            lines.append(f"Error: {detail['error']}")
         return ToolResult(data="\n".join(lines))
 
 
@@ -306,5 +370,8 @@ class TaskListTool(BaseTool):
 
         lines = [f"Tasks ({len(tasks)}):"]
         for t in tasks:
-            lines.append(f"  [{t.status}] {t.task_id}: {t.description}")
+            detail = task_manager.get_task_detail(t.task_id)
+            duration = f" ({detail.get('duration_ms', 0)}ms)" if detail else ""
+            agent_type = f" [{detail.get('agent_type', '')}]" if detail and detail.get("agent_type") else ""
+            lines.append(f"  [{t.status}] {t.task_id}: {t.description}{agent_type}{duration}")
         return ToolResult(data="\n".join(lines))
