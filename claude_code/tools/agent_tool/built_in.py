@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from claude_code.data_types import AgentModel
 from claude_code.tools.agent_tool.definitions import (
     AgentColorName,
     AgentSource,
@@ -166,7 +167,7 @@ EXPLORE_AGENT = BuiltInAgentDefinition(
         "defined, or get an overview of code structure."
     ),
     disallowed_tools=_READ_ONLY_DISALLOWED_TOOLS,
-    model="haiku",
+    model=AgentModel.HAIKU.value,
     omit_claude_md=True,
     source=AgentSource.BUILT_IN,
     base_dir="built-in",
@@ -216,7 +217,7 @@ PLAN_AGENT = BuiltInAgentDefinition(
         "to plan before coding."
     ),
     disallowed_tools=_READ_ONLY_DISALLOWED_TOOLS,
-    model="inherit",
+    model=AgentModel.INHERIT.value,
     omit_claude_md=True,
     source=AgentSource.BUILT_IN,
     base_dir="built-in",
@@ -298,7 +299,7 @@ CLAUDE_CODE_GUIDE_AGENT = BuiltInAgentDefinition(
         "Use when the user asks 'how do I...' questions about Claude Code itself."
     ),
     tools=["Read", "Glob", "Grep", "WebFetch", "WebSearch", "ToolSearch"],
-    model="haiku",
+    model=AgentModel.HAIKU.value,
     permission_mode="dontAsk",
     source=AgentSource.BUILT_IN,
     base_dir="built-in",
@@ -333,7 +334,7 @@ STATUSLINE_SETUP_AGENT = BuiltInAgentDefinition(
         "user wants to set up or modify their Claude Code status line display."
     ),
     tools=["Read", "Edit"],
-    model="sonnet",
+    model=AgentModel.SONNET.value,
     color=AgentColorName.ORANGE,
     source=AgentSource.BUILT_IN,
     base_dir="built-in",

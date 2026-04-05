@@ -416,7 +416,7 @@ def parse_agent_from_markdown(
     model: str | None = None
     if isinstance(model_raw, str) and model_raw.strip():
         trimmed = model_raw.strip()
-        model = "inherit" if trimmed.lower() == "inherit" else trimmed
+        model = AgentModel.INHERIT.value if trimmed.lower() == AgentModel.INHERIT.value.lower() else trimmed
 
     # -- background --
     background_raw = frontmatter.get("background")

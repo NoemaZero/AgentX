@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from claude_code.data_types import (
+    AgentModel,
     Message,
     StreamEvent,
     UserMessage,
@@ -33,7 +34,8 @@ from claude_code.tools.agent_tool.definitions import (
     is_built_in_agent,
 )
 from claude_code.tools.agent_tool.fork import FORK_AGENT, is_fork_subagent_enabled
-from claude_code.tools.agent_tool.utils import run_async_agent_lifecycle
+from claude_code.tools.agent_tool.run_agent import filter_incomplete_tool_calls
+from claude_code.tools.agent_tool.utils import _get_task_output_path, run_async_agent_lifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -61,39 +63,6 @@ class ResumeAgentResult(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
-def _filter_unresolved_tool_uses(messages: list[Message]) -> list[Message]:
-    """Remove assistant messages containing tool_use blocks without a
-    corresponding tool_result in later user messages.
-
-    Translation of filterUnresolvedToolUses.
-    """
-    # Collect all tool_use_ids that have results
-    ids_with_results: set[str] = set()
-    for msg in messages:
-        content = getattr(msg, "content", [])
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_result":
-                    tid = block.get("tool_use_id", "")
-                    if tid:
-                        ids_with_results.add(tid)
-
-    result: list[Message] = []
-    for msg in messages:
-        msg_type = getattr(msg, "type", None)
-        if msg_type == "assistant":
-            content = getattr(getattr(msg, "message", None), "content", [])
-            if isinstance(content, list):
-                has_unresolved = any(
-                    isinstance(b, dict)
-                    and b.get("type") == "tool_use"
-                    and b.get("id", "") not in ids_with_results
-                    for b in content
-                )
-                if has_unresolved:
-                    continue
-        result.append(msg)
-    return result
 
 
 def _filter_orphaned_thinking_only_messages(messages: list[Message]) -> list[Message]:
@@ -183,17 +152,6 @@ async def _read_agent_metadata(agent_id: str) -> dict[str, Any] | None:
         return None
 
 
-def _get_task_output_path(agent_id: str) -> str:
-    """Return the file path for the agent's output transcript.
-
-    Translation of getTaskOutputPath.
-    """
-    try:
-        from claude_code.utils.history import get_task_output_path
-
-        return get_task_output_path(agent_id)
-    except (ImportError, Exception):
-        return f"/tmp/agent-output-{agent_id}.jsonl"
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +215,7 @@ async def resume_agent_background(
     raw_messages: list[Message] = transcript.get("messages", [])
     resumed_messages = _filter_whitespace_only_assistant_messages(
         _filter_orphaned_thinking_only_messages(
-            _filter_unresolved_tool_uses(raw_messages)
+            filter_incomplete_tool_calls(raw_messages)
         )
     )
 
@@ -318,7 +276,7 @@ async def resume_agent_background(
     # ── Step 6: Resolve model (for metadata) ──
     config = parent_engine._config
     resolved_agent_model = selected_agent.model or config.model
-    if resolved_agent_model == "inherit":
+    if resolved_agent_model == AgentModel.INHERIT.value:
         resolved_agent_model = config.model
 
     # ── Step 7: Launch via run_async_agent_lifecycle ──

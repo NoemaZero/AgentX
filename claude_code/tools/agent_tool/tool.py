@@ -69,6 +69,7 @@ from claude_code.tools.agent_tool.fork import (
 )
 from claude_code.tools.agent_tool.prompt import get_prompt
 from claude_code.tools.agent_tool.utils import (
+    _get_task_output_path,
     classify_handoff_if_needed,
     emit_task_progress,
     extract_partial_result,
@@ -313,14 +314,6 @@ def _resolve_agent_definition(
     return None
 
 
-def _get_task_output_path(agent_id: str) -> str:
-    """Return the file path for the agent's output transcript."""
-    try:
-        from claude_code.utils.history import get_task_output_path
-
-        return get_task_output_path(agent_id)
-    except (ImportError, Exception):
-        return f"/tmp/agent-output-{agent_id}.jsonl"
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +399,7 @@ class AgentTool(BaseTool):
                     "agent definition's model, or inherits from the parent."
                 ),
                 required=False,
-                enum=["sonnet", "opus", "haiku"],
+                enum=[AgentModel.SONNET.value, AgentModel.OPUS.value, AgentModel.HAIKU.value],
             ),
         ]
 
@@ -629,10 +622,10 @@ class AgentTool(BaseTool):
             set_agent_color(selected_agent.agent_type, selected_agent.color)
 
         # ── Step 7: Resolve agent model (for metadata) ──
-        main_model = config.model if config else "sonnet"
+        main_model = config.model if config else AgentModel.SONNET.value
         # Translation of getAgentModel: agentDef.model → mainLoopModel → modelOverride
         resolved_model = model_param or selected_agent.model or main_model
-        if resolved_model == "inherit":
+        if resolved_model == AgentModel.INHERIT.value:
             resolved_model = main_model
         # Coordinator mode strips model param
         is_coordinator = os.environ.get(

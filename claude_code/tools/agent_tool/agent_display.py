@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
+from claude_code.data_types import AgentModel
 from claude_code.tools.agent_tool.definitions import (
     AgentSource,
     BaseAgentDefinition,
@@ -124,7 +125,7 @@ def resolve_agent_model_display(agent: BaseAgentDefinition) -> str | None:
     model = agent.model or _get_default_subagent_model()
     if not model:
         return None
-    return "inherit" if model == "inherit" else model
+    return AgentModel.INHERIT.value if model == AgentModel.INHERIT.value else model
 
 
 def _get_default_subagent_model() -> str:
@@ -135,9 +136,9 @@ def _get_default_subagent_model() -> str:
     try:
         from claude_code.config import Config
 
-        return Config.default_model() if hasattr(Config, "default_model") else "sonnet"
+        return Config.default_model() if hasattr(Config, "default_model") else AgentModel.SONNET.value
     except (ImportError, Exception):
-        return "sonnet"
+        return AgentModel.SONNET.value
 
 
 # ---------------------------------------------------------------------------

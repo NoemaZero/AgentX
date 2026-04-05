@@ -33,6 +33,7 @@ from typing import Any, AsyncGenerator
 
 from claude_code.constants.prompts import DEFAULT_AGENT_PROMPT
 from claude_code.data_types import (
+    AgentModel,
     Message,
     StreamEvent,
     StreamEventType,
@@ -212,7 +213,7 @@ async def run_agent(
     resolved_model = model_override or (
         agent_definition.model if agent_definition and agent_definition.model else config.model
     )
-    if resolved_model == "inherit":
+    if resolved_model == AgentModel.INHERIT.value:
         resolved_model = config.model
 
     # ── Step 2: Agent ID ──

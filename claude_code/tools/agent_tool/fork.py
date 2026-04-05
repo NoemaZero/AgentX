@@ -19,7 +19,7 @@ import copy
 import logging
 from typing import Any
 
-from claude_code.data_types import Message, UserMessage
+from claude_code.data_types import AgentModel, Message, UserMessage
 from claude_code.tools.agent_tool.definitions import (
     AgentSource,
     BuiltInAgentDefinition,
@@ -94,7 +94,7 @@ FORK_AGENT = BuiltInAgentDefinition(
     ),
     tools=["*"],   # useExactTools → inherits parent's exact tool pool
     max_turns=200,
-    model="inherit",
+    model=AgentModel.INHERIT.value,
     permission_mode="bubble",
     source=AgentSource.BUILT_IN,
     base_dir="built-in",
