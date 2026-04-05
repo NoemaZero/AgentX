@@ -19,23 +19,24 @@ import asyncio
 import logging
 import os
 import time
-from pathlib import Path
 from typing import Any, NamedTuple
 
 from claude_code.data_types import (
     AgentModel,
     Message,
-    StreamEvent,
     UserMessage,
 )
-from claude_code.tools.agent_tool.constants import AGENT_TOOL_NAME
 from claude_code.tools.agent_tool.definitions import (
     BaseAgentDefinition,
     is_built_in_agent,
 )
-from claude_code.tools.agent_tool.fork import FORK_AGENT, is_fork_subagent_enabled
+from claude_code.tools.agent_tool.fork import FORK_AGENT
 from claude_code.tools.agent_tool.run_agent import filter_incomplete_tool_calls
 from claude_code.tools.agent_tool.utils import _get_task_output_path, run_async_agent_lifecycle
+from claude_code.utils.history import (
+    load_agent_transcript,
+    read_agent_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,36 +124,6 @@ def _filter_whitespace_only_assistant_messages(messages: list[Message]) -> list[
 # ---------------------------------------------------------------------------
 
 
-async def _get_agent_transcript(agent_id: str) -> dict[str, Any] | None:
-    """Load a saved agent transcript from session storage.
-
-    Translation of getAgentTranscript — returns ``{messages, contentReplacements}``
-    or ``None`` if not found.
-    """
-    try:
-        from claude_code.utils.history import load_agent_transcript
-
-        return await load_agent_transcript(agent_id)
-    except (ImportError, Exception):
-        logger.debug("Could not load transcript for %s", agent_id, exc_info=True)
-        return None
-
-
-async def _read_agent_metadata(agent_id: str) -> dict[str, Any] | None:
-    """Load saved agent metadata (agentType, description, worktreePath).
-
-    Translation of readAgentMetadata.
-    """
-    try:
-        from claude_code.utils.history import read_agent_metadata
-
-        return await read_agent_metadata(agent_id)
-    except (ImportError, Exception):
-        logger.debug("Could not load metadata for %s", agent_id, exc_info=True)
-        return None
-
-
-
 
 # ---------------------------------------------------------------------------
 # Core resume function
@@ -205,8 +176,8 @@ async def resume_agent_background(
 
     # ── Step 1: Load transcript + metadata ──
     transcript, meta = await asyncio.gather(
-        _get_agent_transcript(agent_id),
-        _read_agent_metadata(agent_id),
+        load_agent_transcript(agent_id),
+        read_agent_metadata(agent_id),
     )
     if not transcript:
         raise RuntimeError(f"No transcript found for agent ID: {agent_id}")

@@ -123,6 +123,11 @@ def get_prompt(
         )
 
     # ── Shared section ──
+    default_behavior = (
+        "fork mode is used (inherits full context)"
+        if is_fork_enabled
+        else "the general-purpose agent is used"
+    )
     shared = f"""\
 Launch a new agent to handle complex, multi-step tasks autonomously.
 
@@ -132,7 +137,7 @@ handle complex tasks. Each agent type has specific capabilities and tools availa
 {agent_list_section}
 
 When using the {AGENT_TOOL_NAME} tool, specify a subagent_type parameter to select which \
-agent type to use. If omitted, the general-purpose agent is used."""
+agent type to use. If omitted or set to empty string, {default_behavior}."""
 
     # Coordinator mode: return shared only
     if is_coordinator:

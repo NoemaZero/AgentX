@@ -19,22 +19,13 @@ import json
 import logging
 import os
 import time
-from pathlib import Path
-from typing import Any, AsyncGenerator, NamedTuple
+from typing import Any, NamedTuple
 
-from claude_code.data_types import (
-    Message,
-    StreamEvent,
-    StreamEventType,
-    TaskStatus,
-)
 from claude_code.tools.tool_names import (
     AGENT_TOOL_NAME,
     ALL_AGENT_DISALLOWED_TOOLS,
     ASYNC_AGENT_ALLOWED_TOOLS,
     EXIT_PLAN_MODE_TOOL_NAME,
-    LEGACY_AGENT_TOOL_NAME,
-    SEND_MESSAGE_TOOL_NAME,
 )
 from claude_code.tools.agent_tool.definitions import (
     BaseAgentDefinition,
@@ -483,16 +474,10 @@ async def classify_handoff_if_needed(
 
 
 def _get_task_output_path(agent_id: str) -> str:
-    """Return the file path for an agent's output transcript.
+    """Return the file path for an agent's output transcript."""
+    from claude_code.utils.history import get_task_output_path
 
-    Translation of getTaskOutputPath from utils/task/diskOutput.ts.
-    """
-    try:
-        from claude_code.utils.history import get_task_output_path
-
-        return get_task_output_path(agent_id)
-    except (ImportError, Exception):
-        return f"/tmp/agent-output-{agent_id}.jsonl"
+    return get_task_output_path(agent_id)
 
 
 def _write_event_to_output(output_file: str, event: Any) -> None:
@@ -613,11 +598,7 @@ async def run_async_agent_lifecycle(
         )
         # Use TaskManager's abort event if available
         tm_abort = task_manager.get_abort_event(resolved_task_id)
-        if tm_abort is not None and resolved_abort_controller is not None:
-            # Link external abort event → TaskManager abort event
-            async def _link_abort():
-                if resolved_abort_controller is not None:
-                    await asyncio.ensure_future(_wait_and_set(resolved_abort_controller, tm_abort))
+        if tm_abort is not None:
             # Use TaskManager's event as the canonical one
             resolved_abort_controller = tm_abort
 

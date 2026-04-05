@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 import uuid
 from typing import Any, AsyncGenerator
 
@@ -45,7 +44,6 @@ from claude_code.tools.agent_tool.definitions import (
 )
 from claude_code.tools.agent_tool.utils import (
     filter_tools_for_agent,
-    get_last_tool_use_name,
     resolve_agent_tools,
 )
 
@@ -82,47 +80,6 @@ def _build_agent_system_prompt(
     except Exception:
         logger.debug("Failed to get agent system prompt, using default", exc_info=True)
         return DEFAULT_AGENT_PROMPT
-
-
-# ---------------------------------------------------------------------------
-# Skill name resolution — translation of resolveSkillName
-# ---------------------------------------------------------------------------
-
-
-def _resolve_skill_name(
-    skill_name: str,
-    all_skills: list[Any],
-    agent_definition: BaseAgentDefinition,
-) -> str | None:
-    """Resolve a skill name using 3 strategies.
-
-    1. Exact match
-    2. Plugin prefix: ``<plugin>:<skill_name>``
-    3. Suffix match: any skill ending with ``:<skill_name>``
-    """
-    # Strategy 1: exact match
-    for skill in all_skills:
-        name = getattr(skill, "name", "")
-        if name == skill_name:
-            return skill_name
-
-    # Strategy 2: plugin prefix
-    agent_type = agent_definition.agent_type
-    if ":" in agent_type:
-        prefix = agent_type.split(":")[0]
-        prefixed = f"{prefix}:{skill_name}"
-        for skill in all_skills:
-            if getattr(skill, "name", "") == prefixed:
-                return prefixed
-
-    # Strategy 3: suffix match
-    suffix = f":{skill_name}"
-    for skill in all_skills:
-        name = getattr(skill, "name", "")
-        if name.endswith(suffix):
-            return name
-
-    return None
 
 
 # ---------------------------------------------------------------------------

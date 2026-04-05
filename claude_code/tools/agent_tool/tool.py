@@ -35,7 +35,6 @@ from claude_code.data_types import (
     Message,
     PermissionBehavior,
     PermissionResult,
-    StreamEvent,
     StreamEventType,
     ToolParameterType,
     ToolResult,
@@ -70,12 +69,7 @@ from claude_code.tools.agent_tool.fork import (
 from claude_code.tools.agent_tool.prompt import get_prompt
 from claude_code.tools.agent_tool.utils import (
     _get_task_output_path,
-    classify_handoff_if_needed,
-    emit_task_progress,
-    extract_partial_result,
     finalize_agent_tool,
-    get_last_tool_use_name,
-    resolve_agent_tools,
     run_async_agent_lifecycle,
 )
 
@@ -91,21 +85,10 @@ __all__ = ["AgentTool"]
 # Show background hint after this many ms (sync agents only)
 PROGRESS_THRESHOLD_MS = 2_000
 
-# Auto-background agent tasks after this many ms (0 = disabled)
-_AUTO_BACKGROUND_MS_ENV = int(os.environ.get("CLAUDE_AUTO_BACKGROUND_MS", "0"))
+# Background tasks disabled?
 _BACKGROUND_TASKS_DISABLED = os.environ.get(
     "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", ""
 ).lower() in ("1", "true", "yes")
-
-
-def _get_auto_background_ms() -> int:
-    """Return auto-background delay (0 = disabled).
-
-    Translation of getAutoBackgroundMs() in AgentTool.tsx.
-    """
-    if os.environ.get("CLAUDE_AUTO_BACKGROUND_TASKS", "").lower() in ("1", "true"):
-        return 120_000
-    return _AUTO_BACKGROUND_MS_ENV
 
 
 # ---------------------------------------------------------------------------
@@ -217,27 +200,6 @@ def _format_teammate_spawned_result(
         f"name: {name}\n"
         f"team_name: {team_name or ''}\n"
         f"The agent is now running and will receive instructions via mailbox."
-    )
-
-
-def _format_remote_launched_result(
-    *,
-    task_id: str,
-    session_url: str,
-    output_file: str,
-) -> str:
-    """Format a remote-launched agent result.
-
-    Translation of the 'remote_launched' branch.
-    """
-    return (
-        f"Remote agent launched in CCR.\n"
-        f"taskId: {task_id}\n"
-        f"session_url: {session_url}\n"
-        f"output_file: {output_file}\n"
-        f"The agent is running remotely. You will be notified automatically "
-        f"when it completes.\n"
-        f"Briefly tell the user what you launched and end your response."
     )
 
 
@@ -449,10 +411,16 @@ class AgentTool(BaseTool):
             all_defs = get_agent_definitions_with_overrides()
             agents = all_defs.active_agents
             agents = filter_agents_by_mcp_requirements(agents, [])
-            return [a.agent_type for a in agents if a.agent_type]
+            types = [a.agent_type for a in agents if a.agent_type]
         except Exception:
             # Fallback: at minimum expose the general-purpose built-in
-            return [GENERAL_PURPOSE_AGENT.agent_type]
+            types = [GENERAL_PURPOSE_AGENT.agent_type]
+
+        # When fork is enabled, add an empty string option for fork mode
+        if is_fork_subagent_enabled():
+            types = [""] + types
+
+        return types
 
     async def check_permissions(self, tool_input: dict[str, Any]) -> PermissionResult:
         """Translation of checkPermissions — auto-approve sub-agent generation."""
@@ -623,16 +591,20 @@ class AgentTool(BaseTool):
 
         # ── Step 7: Resolve agent model (for metadata) ──
         main_model = config.model if config else AgentModel.SONNET.value
-        # Translation of getAgentModel: agentDef.model → mainLoopModel → modelOverride
-        resolved_model = model_param or selected_agent.model or main_model
-        if resolved_model == AgentModel.INHERIT.value:
-            resolved_model = main_model
-        # Coordinator mode strips model param
         is_coordinator = os.environ.get(
             "CLAUDE_CODE_COORDINATOR_MODE", ""
         ).lower() in ("1", "true")
+
+        # selected_agent.model is already resolved via env var in the definition
+        if model_param:
+            resolved_model = model_param
+        elif selected_agent.model:
+            resolved_model = selected_agent.model
+        else:
+            resolved_model = main_model
+
         if is_coordinator:
-            model_param = None
+            resolved_model = main_model
 
         # ── Effective isolation ──
         effective_isolation = isolation or getattr(selected_agent, "isolation", None)

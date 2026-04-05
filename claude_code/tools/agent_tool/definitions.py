@@ -16,6 +16,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Callable
 
+from pydantic import model_validator
+
 from pydantic import Field
 
 from claude_code.data_types import AgentModel
@@ -134,6 +136,26 @@ class BaseAgentDefinition(MutableModel):
 
     # Callable that returns the system prompt — set per subtype
     _get_system_prompt: Callable[..., str] | None = None
+
+    @model_validator(mode="after")
+    def _resolve_model_from_env(self) -> "BaseAgentDefinition":
+        """Resolve model to the actual model string from the env config.
+
+        Only when ``model`` is a known AgentModel enum value (haiku, sonnet,
+        opus, inherit) do we look up ``DEFAULT_{MODEL}_MODEL``.  Otherwise the
+        raw value (e.g. ``"deepseek-chat"``) is returned as-is.
+        """
+        if self.model:
+            # Dynamically resolve from AgentModel enum, excluding INHERIT
+            resolvable = {
+                v.value for v in AgentModel if v != AgentModel.INHERIT
+            }
+            if self.model.lower() in resolvable:
+                env_var = f"DEFAULT_{self.model.upper()}_MODEL"
+                env_val = os.environ.get(env_var)
+                if env_val:
+                    self.model = env_val
+        return self
 
     def get_system_prompt(self, **kwargs: Any) -> str:
         """Return the system prompt for this agent."""
@@ -408,6 +430,8 @@ def parse_agent_from_markdown(
     # -- color --
     color_raw = frontmatter.get("color")
     color: str | None = None
+    model: str | None = None
+    effort: str | int | None = None
     if isinstance(color_raw, str) and color_raw in [c.value for c in AgentColorName]:
         color = color_raw
 

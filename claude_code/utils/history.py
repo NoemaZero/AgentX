@@ -355,3 +355,125 @@ def resume_session(cwd: str, session_id: str) -> SessionStorage | None:
     storage = SessionStorage(cwd=cwd, session_id=session_id)
     storage._materialized = True
     return storage
+
+
+# ---------------------------------------------------------------------------
+# Agent output transcript helpers
+# ---------------------------------------------------------------------------
+
+_TASK_OUTPUT_BASE_ENV = "CLAUDE_TASK_OUTPUT_DIR"
+_TASK_OUTPUT_DEFAULT_DIR = Path("/tmp", "claude-tasks")
+
+
+def get_task_output_dir() -> str:
+    """Return the task output directory: ``<tmpdir>/claude-tasks/<pid>/``.
+
+    Translation of getTaskOutputDir: respects ``CLAUDE_TASK_OUTPUT_DIR`` env
+    with a default of ``/tmp/claude-tasks/<pid>``.
+    """
+    base = os.environ.get(_TASK_OUTPUT_BASE_ENV)
+    if base:
+        return base
+    return str(Path("/tmp", "claude-tasks", str(os.getpid())))
+
+
+def get_task_output_path(task_id: str) -> str:
+    """Return the JSONL output file path for a task or agent."""
+    output_dir = get_task_output_dir()
+    os.makedirs(output_dir, exist_ok=True)
+    return os.path.join(output_dir, f"{task_id}.jsonl")
+
+
+def _find_task_file(agent_id: str) -> Path | None:
+    """Search for a task file across all PID subdirs.
+
+    Useful when the agent was spawned by a different process.
+    """
+    default_dir = Path(get_task_output_dir()) / f"{agent_id}.jsonl"
+    if default_dir.exists():
+        return default_dir
+
+    if _TASK_OUTPUT_DEFAULT_DIR.exists():
+        for pid_dir in _TASK_OUTPUT_DEFAULT_DIR.iterdir():
+            candidate = pid_dir / f"{agent_id}.jsonl"
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def list_jsonl_files(dir_path: str) -> list[str]:
+    """List all .jsonl files in a directory, sorted by mtime."""
+    d = Path(dir_path)
+    if not d.exists() or not d.is_dir():
+        return []
+    return sorted(
+        [str(p) for p in d.glob("*.jsonl")],
+        key=lambda p: Path(p).stat().st_mtime,
+        reverse=True,
+    )
+
+
+async def load_agent_transcript(agent_id: str) -> dict[str, Any] | None:
+    """Load a previously-recorded agent transcript from the output file.
+
+    Translation of getAgentTranscript — reads events from the JSONL
+    output file and reconstructs a minimal transcript with messages.
+
+    Returns ``{"messages": [...], "contentReplacements": {...}}`` or ``None``.
+    """
+    output_file = _find_task_file(agent_id)
+    if output_file is None:
+        return None
+
+    messages: list[dict[str, Any]] = []
+    try:
+        with output_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                    etype = event.get("type", "")
+                    data = event.get("data", {})
+                    if etype == "message" or etype == "assistant_message":
+                        messages.append({"type": "assistant", **data})
+                    elif etype == "tool_result":
+                        messages.append({"type": "tool_result", **data})
+                    elif etype == "user_message":
+                        messages.append({"type": "user", **data})
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return None
+
+    return {"messages": messages, "contentReplacements": {}}
+
+
+async def read_agent_metadata(agent_id: str) -> dict[str, Any] | None:
+    """Read saved agent metadata from the first event in the output JSONL file.
+
+    Translation of readAgentMetadata from resumeAgent.ts.
+    The first event usually carries metadata (agentType, description, worktreePath).
+    """
+    output_file = _find_task_file(agent_id)
+    if output_file is None:
+        return None
+
+    try:
+        with output_file.open("r", encoding="utf-8") as f:
+            first_line = f.readline().strip()
+            if not first_line:
+                return None
+            event = json.loads(first_line)
+            meta = event.get("metadata", {})
+            if meta:
+                return meta
+            # Fallback: try top-level fields
+            result: dict[str, Any] = {}
+            for key in ("agentType", "agent_type", "description", "worktreePath", "worktreeBranch"):
+                if key in event:
+                    result[key] = event[key]
+            return result if result else None
+    except (json.JSONDecodeError, OSError):
+        return None
