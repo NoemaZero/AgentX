@@ -401,18 +401,6 @@ def _find_task_file(agent_id: str) -> Path | None:
     return None
 
 
-def list_jsonl_files(dir_path: str) -> list[str]:
-    """List all .jsonl files in a directory, sorted by mtime."""
-    d = Path(dir_path)
-    if not d.exists() or not d.is_dir():
-        return []
-    return sorted(
-        [str(p) for p in d.glob("*.jsonl")],
-        key=lambda p: Path(p).stat().st_mtime,
-        reverse=True,
-    )
-
-
 async def load_agent_transcript(agent_id: str) -> dict[str, Any] | None:
     """Load a previously-recorded agent transcript from the output file.
 

@@ -46,7 +46,7 @@ class SkillDefinition(FrozenModel):
     arguments: list[str] = Field(default_factory=list)
     argument_hint: str = ""
     model: AgentModel | str | None = None
-    context: AgentContextMode | None = None
+    context: AgentContextMode | None = AgentContextMode.FORK
     paths: list[str] = Field(default_factory=list)  # conditional activation patterns
     user_invocable: bool = True
     disable_model_invocation: bool = False
@@ -179,7 +179,7 @@ def _parse_skill_definition(
         arguments=arguments,
         argument_hint=fm.get("argument-hint", fm.get("argument_hint", "")),
         model=fm.get("model", ""),
-        context=fm.get("context", ""),
+        context=fm.get("context"),
         paths=paths,
         user_invocable=fm.get("user-invocable", fm.get("user_invocable", True)),
         disable_model_invocation=fm.get(
@@ -234,7 +234,7 @@ def load_skills_dir(directory: str | Path, loaded_from: str = "") -> list[SkillD
                         skill = _parse_skill_definition(name, content, str(skill_file), loaded_from)
                         skills.append(skill)
                         seen_names.add(name)
-                    except OSError as exc:
+                    except Exception as exc:
                         logger.warning("Failed to read skill %s: %s", skill_file, exc)
             elif entry.is_file() and entry.suffix.lower() == ".md":
                 name = entry.stem
@@ -245,9 +245,9 @@ def load_skills_dir(directory: str | Path, loaded_from: str = "") -> list[SkillD
                     skill = _parse_skill_definition(name, content, str(entry), loaded_from)
                     skills.append(skill)
                     seen_names.add(name)
-                except OSError as exc:
+                except Exception as exc:
                     logger.warning("Failed to read skill file %s: %s", entry, exc)
-    except OSError as exc:
+    except Exception as exc:
         logger.warning("Failed to list skills dir %s: %s", directory, exc)
 
     return skills
@@ -259,7 +259,7 @@ def get_all_skills(
 ) -> list[SkillDefinition]:
     """Load skill definitions from all standard locations.
 
-    Priority: managed > user > project > additional.
+    Priority: managed > user > project > additional > bundled.
     Later entries override earlier ones by name.
     """
     skills: dict[str, SkillDefinition] = {}
@@ -292,6 +292,11 @@ def get_all_skills(
         skills_dir = Path(d) / ".claude" / "skills"
         for skill in load_skills_dir(skills_dir, loaded_from="additional"):
             skills[skill.name] = skill
+
+    # 4. Bundled skills (programmatic, lowest priority)
+    bundled_dir = Path(__file__).parent / "bundled"
+    for skill in load_skills_dir(bundled_dir, loaded_from="bundled"):
+        skills.setdefault(skill.name, skill)
 
     return list(skills.values())
 
