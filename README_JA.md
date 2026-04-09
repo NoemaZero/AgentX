@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/hello.png" alt="Claude Code Python — インタラクティブ REPL" width="720">
+  <img src="docs/hello.gif" alt="Claude Code Python — インタラクティブ REPL" width="720">
 </p>
 
 ---
