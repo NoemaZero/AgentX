@@ -10,34 +10,58 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from rich.console import Console
 
+from claude_code import __version__
 from claude_code.commands.registry import CommandRegistry
 from claude_code.config import Config
 from claude_code.engine.query_engine import QueryEngine
-from claude_code.data_types import StreamEvent
-from claude_code.ui.renderer import (
-    render_assistant_text,
-    render_cost,
-    render_error,
-    render_info,
-    render_tool_result,
-    render_tool_use,
-)
+from claude_code.ui.renderer import render_cost, render_error
+from claude_code.ui.stream_renderer import StreamRenderer
 
 console = Console()
 
-WELCOME_BANNER = """╭─────────────────────────────────╮
-│   Claude Code (Python Edition)  │
-│   Type /help for commands       │
-│   Press Ctrl+C to interrupt     │
-╰─────────────────────────────────╯"""
 
 
 async def run_repl(config: Config) -> None:
     """Run the interactive REPL loop — translation of screens/REPL.tsx."""
-    console.print(WELCOME_BANNER, style="bold blue")
-    console.print(f"  Model: {config.model}", style="dim")
-    console.print(f"  CWD:   {config.cwd}", style="dim")
-    console.print(f"  Mode:  {config.permission_mode}", style="dim")
+    # Render welcome banner with version and configuration
+    from rich.panel import Panel
+
+    # Format workdir for display, truncate if too long
+    workdir_display = config.cwd
+    if len(config.cwd) > 50:
+        # Show last 47 characters with ellipsis
+        workdir_display = "..." + config.cwd[-47:]
+
+    banner_lines = [
+        "",
+        f"Model: {config.model}",
+        f"Workdir:   {workdir_display}",
+        f"Permission Mode:  {config.permission_mode}",
+        "",
+        "Type /help for commands",
+        "Press Ctrl+C to interrupt or Ctrl+D to exit",
+    ]
+
+    banner_text = "\n".join(banner_lines)
+
+    # Calculate appropriate width based on content
+    title_text = f"🤖 Claude Code v{__version__}"
+    content_lines = banner_lines + [title_text]
+    max_line_length = max((len(line) for line in content_lines if line), default=40)
+    # Add padding for borders and padding: 2 chars for borders + 2 chars for horizontal padding
+    panel_width = max_line_length + 4
+    # Limit maximum width to 80 characters for better readability
+    panel_width = min(panel_width, 80)
+
+    panel = Panel(
+        banner_text,
+        title=f"[bold green]🤖 Claude Code v{__version__}[/bold green]",
+        border_style="green",
+        padding=(0, 1),
+        title_align="left",
+        width=panel_width
+    )
+    console.print(panel)
     console.print()
 
     engine = QueryEngine(config)
@@ -132,18 +156,14 @@ async def _handle_command_result(result: str, engine: QueryEngine, config: Confi
 
 
 async def _process_query(engine: QueryEngine, user_input: str, config: Config) -> None:
-    """Process a single user query through the engine."""
-    assistant_text_parts: list[str] = []
+    """Process a single user query through the engine with real-time streaming."""
+    renderer = StreamRenderer(console)
 
     async for event in engine.submit_message(user_input):
-        _handle_event(event, assistant_text_parts)
+        await renderer.render_event(event)
 
-    # Render accumulated assistant text
-    full_text = "".join(assistant_text_parts)
-    if full_text.strip():
-        console.print()
-        render_assistant_text(full_text)
-        console.print()
+    # Ensure any buffered content is rendered
+    await renderer._flush_buffer()
 
     # Show usage with cost estimate
     usage = engine.total_usage
@@ -158,35 +178,3 @@ async def _process_query(engine: QueryEngine, user_input: str, config: Config) -
         render_cost(usage.input_tokens, usage.output_tokens, cost_usd)
 
 
-def _handle_event(event: StreamEvent, text_parts: list[str]) -> None:
-    """Handle a single stream event."""
-    from claude_code.data_types import StreamEventType
-
-    if event.type == StreamEventType.CONTENT_DELTA:
-        # Accumulate text for final rendering
-        text_parts.append(str(event.data))
-
-    elif event.type == StreamEventType.TOOL_USE:
-        data = event.data
-        if isinstance(data, dict):
-            render_tool_use(data.get("name", "?"), data.get("id", ""))
-
-    elif event.type == StreamEventType.TOOL_RESULT:
-        data = event.data
-        if isinstance(data, dict):
-            content = data.get("content", "")
-            is_error = content.startswith("Error")
-            render_tool_result("tool", content, is_error)
-
-    elif event.type == StreamEventType.AUTO_COMPACT:
-        data = event.data
-        if isinstance(data, dict):
-            render_info(
-                f"Auto-compact: {data.get('before', '?')} → {data.get('after', '?')} messages"
-            )
-
-    elif event.type == StreamEventType.QUERY_ERROR:
-        render_error(str(event.data))
-
-    elif event.type == StreamEventType.MAX_TURNS_REACHED:
-        render_info("Maximum turns reached. Please continue the conversation.")

@@ -21,8 +21,9 @@ if _parent not in sys.path:
 import click
 
 from claude_code import __version__
-from claude_code.config import load_config
-from claude_code.data_types import PermissionMode, StreamEventType
+from claude_code.config import Config, load_config
+from claude_code.data_types import PermissionMode
+from claude_code.ui.stream_renderer import StreamRenderer
 
 
 @click.command()
@@ -103,45 +104,31 @@ def main(
         asyncio.run(_run_repl(config))
 
 
-async def _run_repl(config) -> None:
+async def _run_repl(config: Config) -> None:
     """Launch the interactive REPL."""
     from claude_code.ui.repl import run_repl
     await run_repl(config)
 
 
-async def _run_single_query(config, query: str) -> None:
-    """Run a single non-interactive query."""
+async def _run_single_query(config: Config, query: str) -> None:
+    """Run a single non-interactive query with real-time streaming."""
     from rich.console import Console
 
     from claude_code.engine.query_engine import QueryEngine
-    from claude_code.ui.renderer import render_assistant_text, render_error
 
     console = Console()
+    renderer = StreamRenderer(console)
     engine = QueryEngine(config)
     await engine.initialize()
 
-    text_parts: list[str] = []
-
     try:
         async for event in engine.submit_message(query):
-            if event.type == StreamEventType.CONTENT_DELTA:
-                text_parts.append(str(event.data))
-            elif event.type == StreamEventType.TOOL_USE:
-                data = event.data
-                if isinstance(data, dict):
-                    console.print(f"  ⚡ {data.get('name', '?')}", style="bold cyan")
-            elif event.type == StreamEventType.QUERY_ERROR:
-                render_error(str(event.data))
-                return
-
-        full_text = "".join(text_parts)
-        if full_text.strip():
-            render_assistant_text(full_text)
+            await renderer.render_event(event)
 
     except KeyboardInterrupt:
         console.print("\n[interrupted]", style="yellow")
     except Exception as e:
-        render_error(str(e))
+        await renderer.render_error(str(e))
         sys.exit(1)
 
 
