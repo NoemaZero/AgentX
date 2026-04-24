@@ -3,10 +3,30 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "claude-code-py"
+name = "agent-x"
 version = "0.1.0"
-description = "Claude Code Python - AI coding assistant (OpenAI provider pattern)"
+description = "AgentX — Customizable, highly-abstracted production-grade digital employee infrastructure. A strict 1:1 Python port of Anthropic's Claude Code."
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Morgan Mo", email = "noemazero@github.com"},
+]
+keywords = ["ai", "coding-assistant", "claude", "agent", "llm", "openai-compatible"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Framework :: AsyncIO",
+]
 dependencies = [
     "openai>=1.30.0",
     "rich>=13.0.0",
@@ -16,16 +36,23 @@ dependencies = [
     "click>=8.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/NoemaZero/AgentX"
+Repository = "https://github.com/NoemaZero/AgentX.git"
+Issues = "https://github.com/NoemaZero/AgentX/issues"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-xdist>=3.0",
+    "python-dotenv>=1.0",
     "ruff>=0.4",
     "mypy>=1.10",
 ]
 
 [project.scripts]
-claude-code = "AgentX.main:main"
+agent-x = "AgentX.main:main"
 
 [tool.setuptools.packages.find]
 include = ["AgentX*"]

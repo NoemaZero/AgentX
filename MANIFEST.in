@@ -1,0 +1,10 @@
+include README.md README_CN.md README_JA.md LICENSE
+include requirements.txt
+prune tests
+prune docs
+prune .claude
+prune .vscode
+exclude .env .gitignore CLAUDE.md
+global-exclude __pycache__
+global-exclude *.py[codz]
+global-exclude .DS_Store
