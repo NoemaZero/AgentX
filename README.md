@@ -9,9 +9,9 @@
 <h1 align="center">AgentX</h1>
 
 <p align="center">
-  <strong>可自定义、高度抽象的生产级数字员工基础设施</strong>
+  <strong>Customizable, highly-abstracted, production-grade digital employee infrastructure</strong>
   <br/>
-  基于 AgentX 架构的严格 Python 翻译，接入任意 OpenAI 兼容 LLM 后端。
+  A strict 1:1 Python port of the AgentX architecture. Plug in any OpenAI-compatible LLM backend.
 </p>
 
 <p align="center">
@@ -25,18 +25,18 @@
 
 ---
 
-## Vision / 愿景
+## Vision
 
-**打造一个可自定义、高度抽象的生产级数字员工。**
+**Build a customizable, highly-abstracted, production-grade digital employee.**
 
-AgentX 不仅仅是一个 AI 编程 CLI —— 它的目标是成为每个人、每个团队都能按需定制的**数字员工基础设施**。
+AgentX is more than an AI coding CLI — it aims to be the **digital employee infrastructure** that every individual and team can customize on demand.
 
-| 维度 | 目标 |
+| Dimension | Goal |
 |------|------|
-| **可自定义** | 通过 `AGENTX_*` 环境变量、CLAUDE.md 规则体系、MCP 协议、自定义 Agent 定义，让每位用户构建专属的智能助手。品牌、行为、工具栈均可替换。 |
-| **高度抽象** | 递归自相似 Agent 架构：主线程与子 Agent 共用同一套 `query()` 循环。Provider 模式彻底解耦 LLM 后端——接入任何 OpenAI 兼容 API 即可运行。Permission 系统提供 7 种权限模式逐级控制。 |
-| **生产级** | 全异步 asyncio 引擎、流式响应、Pydantic 严格校验、自动压缩上下文、会话持久化、多 Agent 协同、错误恢复链、Stop Hooks 安全退出 —— 所有组件经过 TypeScript 原版验证后严格翻译。 |
-| **数字员工** | 不是"对话机器人"，而是能读、写、执行、验证、自我纠错的 Agent。Fork 后台子 Agent、Verification Agent 独立验证、Teammates 多 Agent 协作 —— 像一位真正的工程师一样完成工作。 |
+| **Customizable** | Via `AGENTX_*` env vars, CLAUDE.md rules system, MCP protocol, and custom Agent definitions, every user builds their own intelligent assistant. Brand, behavior, and toolstack are all replaceable. |
+| **Highly Abstracted** | Recursive self-similar Agent architecture: main thread and sub-agents share the same `query()` loop. The Provider pattern fully decouples the LLM backend — drop in any OpenAI-compatible API. 7 permission modes for granular control. |
+| **Production-Grade** | Full async asyncio engine, streaming responses, strict Pydantic validation, automatic context compaction, session persistence, multi-Agent collaboration, error recovery chain, Stop Hooks for safe exit — every component verified against the TypeScript original then rigorously translated. |
+| **Digital Employee** | Not a "chatbot," but an Agent that reads, writes, executes, verifies, and self-corrects. Fork background sub-Agents, independent Verification Agents, Teammates multi-Agent collaboration — completing work like a real engineer. |
 
 <p align="center">
   <em>"Don't just chat with AI. Hire it."</em>
