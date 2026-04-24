@@ -260,6 +260,66 @@ open example/gomoku/index.html
 
 ---
 
+## 扩展开发 & SDK
+
+AgentX 设计为开发者框架，支持编程式调用和自定义工具开发。
+
+### 编程式 API
+
+```python
+import asyncio
+from AgentX.config import load_config
+from AgentX.engine.query_engine import QueryEngine
+from AgentX.ui.stream_renderer import StreamRenderer
+from rich.console import Console
+
+async def main():
+    config = load_config(
+        model="gpt-4o",
+        api_key="sk-...",
+        provider="openai",
+    )
+    engine = QueryEngine(config)
+    await engine.initialize()
+
+    renderer = StreamRenderer(Console())
+    async for event in engine.submit_message("解释这个代码库"):
+        await renderer.render_event(event)
+
+asyncio.run(main())
+```
+
+### 自定义工具
+
+```python
+from AgentX.tools.base import BaseTool, ToolResult
+
+class WeatherTool(BaseTool):
+    name: str = "get_weather"
+    description: str = "获取指定城市的天气"
+    is_read_only: bool = True
+
+    def get_parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "城市名称"}
+            },
+            "required": ["city"],
+        }
+
+    async def execute(self, *, tool_input: dict, cwd: str, **kwargs) -> ToolResult:
+        city = tool_input.get("city", "Unknown")
+        # 在此调用你的 API
+        return ToolResult(data=f"{city}天气：25°C，晴天")
+
+# 注册到引擎
+engine = QueryEngine(config)
+engine.register_tool(WeatherTool())
+```
+
+---
+
 ## 项目结构
 
 ```

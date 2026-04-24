@@ -260,6 +260,69 @@ Strict translation of the original permission modes:
 
 ---
 
+## Extensibility & SDK
+
+AgentX is designed as a developer framework. Use it programmatically or build custom tools.
+
+### Programmatic API
+
+```python
+import asyncio
+from AgentX.config import load_config
+from AgentX.engine.query_engine import QueryEngine
+from AgentX.ui.stream_renderer import StreamRenderer
+from rich.console import Console
+
+async def main():
+    config = load_config(
+        model="gpt-4o",
+        api_key="sk-...",
+        provider="openai",
+    )
+    engine = QueryEngine(config)
+    await engine.initialize()
+
+    renderer = StreamRenderer(Console())
+    async for event in engine.submit_message("Explain this codebase"):
+        await renderer.render_event(event)
+
+asyncio.run(main())
+```
+
+### Create a Custom Tool
+
+```python
+from AgentX.tools.base import BaseTool, ToolResult
+
+class WeatherTool(BaseTool):
+    name: str = "get_weather"
+    description: str = "Get current weather for a city"
+    is_read_only: bool = True
+
+    def get_parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "City name"
+                }
+            },
+            "required": ["city"],
+        }
+
+    async def execute(self, *, tool_input: dict, cwd: str, **kwargs) -> ToolResult:
+        city = tool_input.get("city", "Unknown")
+        # Call your API here
+        return ToolResult(data=f"Weather in {city}: 25°C, sunny")
+
+# Register with the engine
+engine = QueryEngine(config)
+engine.register_tool(WeatherTool())
+```
+
+---
+
 ## Project Structure
 
 ```

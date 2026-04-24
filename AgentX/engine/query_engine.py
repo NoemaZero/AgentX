@@ -11,7 +11,7 @@ from typing import AsyncIterator
 
 from AgentX.config import Config
 from AgentX.constants.prompts import get_system_prompt
-from AgentX.engine.context import get_git_status, get_system_context, get_user_context
+from AgentX.engine.context import get_system_context, get_user_context
 from AgentX.engine.query import QueryParams, query
 from AgentX.permissions.checker import PermissionChecker
 from AgentX.services.api.client import LLMClient
@@ -102,6 +102,17 @@ class QueryEngine:
             self._system_prompt += f"\n\n{self._config.append_system_prompt}"
 
         self._initialized = True
+
+    def register_tool(self, tool: BaseTool) -> None:
+        """Register a custom tool into the engine.
+
+        The tool is added to the active tool list and becomes available
+        in subsequent queries. Can be called before or after initialize().
+        """
+        self._tools.append(tool)
+        self._tools_by_name[tool.name] = tool
+        for alias in tool.aliases:
+            self._tools_by_name[alias] = tool
 
     async def submit_message(self, user_input: str) -> AsyncIterator[StreamEvent]:
         """Submit a user message and stream the response.

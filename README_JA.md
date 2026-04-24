@@ -259,6 +259,66 @@ open example/gomoku/index.html
 
 ---
 
+## 拡張開発 & SDK
+
+AgentX は開発者フレームワークとして設計されています。プログラムからの呼び出しやカスタムツールの開発が可能です。
+
+### プログラマティック API
+
+```python
+import asyncio
+from AgentX.config import load_config
+from AgentX.engine.query_engine import QueryEngine
+from AgentX.ui.stream_renderer import StreamRenderer
+from rich.console import Console
+
+async def main():
+    config = load_config(
+        model="gpt-4o",
+        api_key="sk-...",
+        provider="openai",
+    )
+    engine = QueryEngine(config)
+    await engine.initialize()
+
+    renderer = StreamRenderer(Console())
+    async for event in engine.submit_message("このコードベースを説明して"):
+        await renderer.render_event(event)
+
+asyncio.run(main())
+```
+
+### カスタムツール
+
+```python
+from AgentX.tools.base import BaseTool, ToolResult
+
+class WeatherTool(BaseTool):
+    name: str = "get_weather"
+    description: str = "指定された都市の天気を取得します"
+    is_read_only: bool = True
+
+    def get_parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "都市名"}
+            },
+            "required": ["city"],
+        }
+
+    async def execute(self, *, tool_input: dict, cwd: str, **kwargs) -> ToolResult:
+        city = tool_input.get("city", "Unknown")
+        # ここで API を呼び出す
+        return ToolResult(data=f"{city}の天気：25°C、晴れ")
+
+# エンジンに登録
+engine = QueryEngine(config)
+engine.register_tool(WeatherTool())
+```
+
+---
+
 ## プロジェクト構造
 
 ```
