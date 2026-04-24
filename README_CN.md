@@ -112,7 +112,7 @@ AgentX 不仅仅是一个 AI 编程 CLI —— 它的目标是成为每个人、
 
 ```bash
 # 克隆仓库
-git clone https://github.com/NoemaZero/clawd-agent.git
+git clone https://github.com/NoemaZero/AgentX.git
 cd agentx-py
 
 # 创建虚拟环境

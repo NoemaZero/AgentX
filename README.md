@@ -112,7 +112,7 @@ The architecture is a direct mirror of the original TypeScript source. See [docs
 
 ```bash
 # Clone the repo
-git clone https://github.com/NoemaZero/clawd-agent.git
+git clone https://github.com/NoemaZero/AgentX.git
 cd agentx-py
 
 # Create virtual environment

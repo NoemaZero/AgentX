@@ -26,7 +26,7 @@ import os
 _APP_NAME = os.environ.get("AGENTX_APP_NAME", "AgentX")
 _APP_COMPANY = os.environ.get("AGENTX_APP_COMPANY", "")
 _APP_DISPLAY_NAME = os.environ.get("AGENTX_APP_DISPLAY_NAME", "") or _APP_NAME
-_APP_ISSUES_URL = os.environ.get("AGENTX_APP_ISSUES_URL", "https://github.com/NoemaZero/clawd-agent/issues")
+_APP_ISSUES_URL = os.environ.get("AGENTX_APP_ISSUES_URL", "https://github.com/NoemaZero/AgentX/issues")
 _APP_DOCS_URL = os.environ.get("AGENTX_APP_DOCS_URL", "")
 _APP_USER_AGENT = os.environ.get("AGENTX_APP_USER_AGENT", "") or f"{_APP_NAME}/0.1"
 _APP_HELP_NAME = os.environ.get("AGENTX_APP_HELP_NAME", "") or _APP_NAME
