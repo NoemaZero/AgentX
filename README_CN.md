@@ -3,6 +3,7 @@
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
   <img src="https://img.shields.io/badge/OpenAI_Compatible-yes-brightgreen?logo=openai" alt="OpenAI Compatible">
   <img src="https://img.shields.io/badge/AsyncIO-native-purple" alt="AsyncIO">
+  <a href="https://pypi.org/project/agent-x/"><img src="https://img.shields.io/pypi/v/agent-x?label=PyPI&color=orange" alt="PyPI version"></a>
 </p>
 
 <h1 align="center">AgentX</h1>
@@ -111,18 +112,22 @@ AgentX 不仅仅是一个 AI 编程 CLI —— 它的目标是成为每个人、
 ### 安装
 
 ```bash
+# 通过 pip 安装（推荐）
+pip install agent-x
+```
+
+或从源码安装：
+
+```bash
 # 克隆仓库
 git clone https://github.com/NoemaZero/AgentX.git
-cd agentx-py
+cd AgentX
 
 # 创建虚拟环境
 python -m venv env
 source env/bin/activate  # Windows: env\Scripts\activate
 
-# 安装依赖
-pip install -r requirements.txt
-
-# 或以可编辑模式安装
+# 以可编辑模式安装
 pip install -e .
 ```
 
@@ -167,8 +172,8 @@ python -m AgentX -v
 或使用安装后的 CLI：
 
 ```bash
-agentx "解释这个代码库"
-agentx --model gpt-4o --max-turns 10
+agent-x "解释这个代码库"
+agent-x --model gpt-4o --max-turns 10
 ```
 
 ---

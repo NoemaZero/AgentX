@@ -3,6 +3,7 @@
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
   <img src="https://img.shields.io/badge/OpenAI_Compatible-yes-brightgreen?logo=openai" alt="OpenAI Compatible">
   <img src="https://img.shields.io/badge/AsyncIO-native-purple" alt="AsyncIO">
+  <a href="https://pypi.org/project/agent-x/"><img src="https://img.shields.io/pypi/v/agent-x?label=PyPI&color=orange" alt="PyPI version"></a>
 </p>
 
 <h1 align="center">AgentX</h1>
@@ -111,18 +112,22 @@ The architecture is a direct mirror of the original TypeScript source. See [docs
 ### Installation
 
 ```bash
+# Install via pip (recommended)
+pip install agent-x
+```
+
+Or install from source:
+
+```bash
 # Clone the repo
 git clone https://github.com/NoemaZero/AgentX.git
-cd agentx-py
+cd AgentX
 
 # Create virtual environment
 python -m venv env
 source env/bin/activate  # or `env\Scripts\activate` on Windows
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Or install as editable package
+# Install as editable package
 pip install -e .
 ```
 
@@ -167,8 +172,8 @@ python -m AgentX -v
 Or use the installed CLI:
 
 ```bash
-agentx "explain this codebase"
-agentx --model gpt-4o --max-turns 10
+agent-x "explain this codebase"
+agent-x --model gpt-4o --max-turns 10
 ```
 
 ---
