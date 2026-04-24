@@ -330,9 +330,9 @@ Agent 按以下顺序加载，**后加载的覆盖先加载的** (相同 agentTy
    ↓ 被覆盖
 2. plugin agents (插件)
    ↓ 被覆盖
-3. userSettings agents (~/.claude/agents/*.md)
+3. userSettings agents (~/.agentx/agents/*.md)
    ↓ 被覆盖
-4. projectSettings agents (.claude/agents/*.md)
+4. projectSettings agents (.agentx/agents/*.md)
    ↓ 被覆盖
 5. flagSettings agents (GrowthBook 远程配置)
    ↓ 被覆盖
@@ -969,9 +969,9 @@ if (shouldPreventContinuation):
 
 | Scope | 路径 | 用途 |
 |-------|------|------|
-| `user` | `~/.claude/agent-memory/<agentType>/` | 跨项目通用知识 |
-| `project` | `.claude/agent-memory/<agentType>/` | 项目特定，VCS追踪 |
-| `local` | `.claude/agent-memory-local/<agentType>/` | 项目特定，不入VCS |
+| `user` | `~/.agentx/agent-memory/<agentType>/` | 跨项目通用知识 |
+| `project` | `.agentx/agent-memory/<agentType>/` | 项目特定，VCS追踪 |
+| `local` | `.agentx/agent-memory-local/<agentType>/` | 项目特定，不入VCS |
 
 ### 10.2 Memory 加载机制
 

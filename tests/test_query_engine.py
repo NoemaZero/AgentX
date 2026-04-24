@@ -13,21 +13,21 @@ from typing import Any, AsyncIterator
 
 import pytest
 
-from claude_code.data_types import (
+from AgentX.data_types import (
     AssistantMessage,
     Message,
     StreamEvent,
     StreamEventType,
     UserMessage,
 )
-from claude_code.engine.query import QueryParams, TransitionReason, query
-from claude_code.engine.query_engine import QueryEngine
-from claude_code.permissions.checker import PermissionChecker
-from claude_code.services.api.client import LLMClient
-from claude_code.services.api.usage import UsageTracker
-from claude_code.services.compact import AutoCompactTracker
-from claude_code.tasks.manager import TaskManager
-from claude_code.utils.hooks import HookManager
+from AgentX.engine.query import QueryParams, TransitionReason, query
+from AgentX.engine.query_engine import QueryEngine
+from AgentX.permissions.checker import PermissionChecker
+from AgentX.services.api.client import LLMClient
+from AgentX.services.api.usage import UsageTracker
+from AgentX.services.compact import AutoCompactTracker
+from AgentX.tasks.manager import TaskManager
+from AgentX.utils.hooks import HookManager
 
 from conftest import (
     GetWeatherTool,

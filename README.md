@@ -5,12 +5,12 @@
   <img src="https://img.shields.io/badge/AsyncIO-native-purple" alt="AsyncIO">
 </p>
 
-<h1 align="center">Claude Code Python</h1>
+<h1 align="center">AgentX</h1>
 
 <p align="center">
-  <strong>A faithful Python port of Anthropic's <a href="https://github.com/anthropics/claude-code">Claude Code</a> — the official AI coding CLI.</strong>
+  <strong>可自定义、高度抽象的生产级数字员工基础设施</strong>
   <br/>
-  Strict 1:1 architecture translation from TypeScript to Python, powered by any OpenAI-compatible provider.
+  基于 AgentX 架构的严格 Python 翻译，接入任意 OpenAI 兼容 LLM 后端。
 </p>
 
 <p align="center">
@@ -18,7 +18,27 @@
 </p>
 
 <p align="center">
-  <img src="docs/hello.gif" alt="Claude Code Python — Interactive REPL" width="720">
+  <img src="docs/hello.gif" alt="AgentX — Interactive REPL" width="720">
+</p>
+
+
+---
+
+## Vision / 愿景
+
+**打造一个可自定义、高度抽象的生产级数字员工。**
+
+AgentX 不仅仅是一个 AI 编程 CLI —— 它的目标是成为每个人、每个团队都能按需定制的**数字员工基础设施**。
+
+| 维度 | 目标 |
+|------|------|
+| **可自定义** | 通过 `AGENTX_*` 环境变量、CLAUDE.md 规则体系、MCP 协议、自定义 Agent 定义，让每位用户构建专属的智能助手。品牌、行为、工具栈均可替换。 |
+| **高度抽象** | 递归自相似 Agent 架构：主线程与子 Agent 共用同一套 `query()` 循环。Provider 模式彻底解耦 LLM 后端——接入任何 OpenAI 兼容 API 即可运行。Permission 系统提供 7 种权限模式逐级控制。 |
+| **生产级** | 全异步 asyncio 引擎、流式响应、Pydantic 严格校验、自动压缩上下文、会话持久化、多 Agent 协同、错误恢复链、Stop Hooks 安全退出 —— 所有组件经过 TypeScript 原版验证后严格翻译。 |
+| **数字员工** | 不是"对话机器人"，而是能读、写、执行、验证、自我纠错的 Agent。Fork 后台子 Agent、Verification Agent 独立验证、Teammates 多 Agent 协作 —— 像一位真正的工程师一样完成工作。 |
+
+<p align="center">
+  <em>"Don't just chat with AI. Hire it."</em>
 </p>
 
 
@@ -26,9 +46,9 @@
 
 ## Why This Project?
 
-[Claude Code](https://github.com/anthropics/claude-code) is Anthropic's official agentic coding CLI — a terminal-native AI assistant that can read, write, and execute code with human-in-the-loop permission control. However, the original is written in TypeScript and tightly coupled to the Anthropic SDK.
+The agentic coding CLI paradigm has proven transformative for developer productivity, but existing implementations are tightly coupled to specific SDKs and runtimes. **AgentX** breaks this coupling.
 
-**Claude Code Python** is a **strict, line-by-line translation** of the original TypeScript codebase into idiomatic Python. Every prompt, tool name, parameter schema, and behavioral flag is preserved exactly as-is from the source, while the runtime is rebuilt on Python's async ecosystem and the OpenAI-compatible provider pattern — so you can plug in **any** LLM backend (OpenAI, DeepSeek, Ollama, vLLM, LiteLLM, etc.).
+**AgentX** is a **strict, architecture-level port** of the agentic coding CLI concept into idiomatic Python. Every prompt, tool name, parameter schema, and behavioral flag is carefully preserved, while the runtime is rebuilt on Python's async ecosystem and the OpenAI-compatible provider pattern — so you can plug in **any** LLM backend (OpenAI, DeepSeek, Ollama, vLLM, LiteLLM, etc.).
 
 ### Key Goals
 
@@ -92,8 +112,8 @@ The architecture is a direct mirror of the original TypeScript source. See [docs
 
 ```bash
 # Clone the repo
-git clone https://github.com/NoemaZero/claude-code-py.git
-cd claude-code-py
+git clone https://github.com/NoemaZero/clawd-agent.git
+cd agentx-py
 
 # Create virtual environment
 python -m venv env
@@ -127,35 +147,35 @@ export OPENAI_BASE_URL="http://localhost:11434/v1"
 
 ```bash
 # Interactive REPL
-python -m claude_code
+python -m AgentX
 
 # Single query (non-interactive)
-python -m claude_code "fix the bug in main.py"
+python -m AgentX "fix the bug in main.py"
 
 # Specify model / provider
-python -m claude_code --model gpt-4o
-python -m claude_code --provider deepseek --model deepseek-chat
+python -m AgentX --model gpt-4o
+python -m AgentX --provider deepseek --model deepseek-chat
 
 # Permission modes
-python -m claude_code --permission-mode auto
-python -m claude_code --permission-mode plan
+python -m AgentX --permission-mode auto
+python -m AgentX --permission-mode plan
 
 # Verbose output
-python -m claude_code -v
+python -m AgentX -v
 ```
 
 Or use the installed CLI:
 
 ```bash
-claude-code "explain this codebase"
-claude-code --model gpt-4o --max-turns 10
+agentx "explain this codebase"
+agentx --model gpt-4o --max-turns 10
 ```
 
 ---
 
 ## Tool System
 
-All 30+ tools are strict translations of the original Claude Code tool definitions, preserving exact names, descriptions, and parameter schemas:
+All 30+ tools are strict translations of the original AgentX tool definitions, preserving exact names, descriptions, and parameter schemas:
 
 | Tool | Name | Description |
 |------|------|-------------|
@@ -180,7 +200,7 @@ All 30+ tools are strict translations of the original Claude Code tool definitio
 
 ## LLM Provider Support
 
-Claude Code Python uses the **OpenAI-compatible provider pattern**, making it work with virtually any LLM backend:
+AgentX uses the **OpenAI-compatible provider pattern**, making it work with virtually any LLM backend:
 
 | Provider | Config |
 |----------|--------|
@@ -195,10 +215,10 @@ Claude Code Python uses the **OpenAI-compatible provider pattern**, making it wo
 
 ## Demo: Gomoku (Five-in-a-Row)
 
-The [`example/gomoku/`](example/gomoku/) directory showcases a complete Gomoku game **generated entirely by Claude Code Python** — from the game board rendering to the AI opponent logic.
+The [`example/gomoku/`](example/gomoku/) directory showcases a complete Gomoku game **generated entirely by AgentX** — from the game board rendering to the AI opponent logic.
 
 <p align="center">
-  <img src="docs/gomoku.jpg" alt="Gomoku game demo — generated by Claude Code Python" width="640">
+  <img src="docs/gomoku.jpg" alt="Gomoku game demo — generated by AgentX" width="640">
 </p>
 
 ### Features of the generated game:
@@ -215,7 +235,7 @@ The [`example/gomoku/`](example/gomoku/) directory showcases a complete Gomoku g
 open example/gomoku/index.html
 ```
 
-This demo illustrates the full agentic workflow: Claude Code Python reads the requirements, plans the architecture, writes HTML/CSS/JS files, and iterates until the game is complete — all through the tool system.
+This demo illustrates the full agentic workflow: AgentX reads the requirements, plans the architecture, writes HTML/CSS/JS files, and iterates until the game is complete — all through the tool system.
 
 ---
 
@@ -238,7 +258,7 @@ Strict translation of the original permission modes:
 ## Project Structure
 
 ```
-claude_code/
+AgentX/
 ├── main.py                 # CLI entry point (→ main.tsx)
 ├── config.py               # Configuration (→ entrypoints/init.ts)
 ├── data_types.py           # Core types (→ Tool.ts + types/)
@@ -315,10 +335,10 @@ pip install -e ".[dev]"
 pytest
 
 # Lint
-ruff check claude_code/
+ruff check AgentX/
 
 # Type check
-mypy claude_code/
+mypy AgentX/
 ```
 
 ---
@@ -348,5 +368,5 @@ Contributions are welcome! When contributing, please follow the translation prin
 ---
 
 <p align="center">
-  <sub>Strictly translated from <a href="https://github.com/anthropics/claude-code">Anthropic's Claude Code</a> TypeScript source — reimagined for the Python ecosystem.</sub>
+  <sub>Built for the Python ecosystem — open-source and provider-agnostic.</sub>
 </p>

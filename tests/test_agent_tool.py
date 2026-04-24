@@ -22,21 +22,21 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from claude_code.data_types import (
+from AgentX.data_types import (
     AgentModel,
     StreamEvent,
     StreamEventType,
     UserMessage,
 )
-from claude_code.engine.query_engine import QueryEngine
-from claude_code.permissions.checker import PermissionChecker
-from claude_code.services.api.client import LLMClient
-from claude_code.services.api.usage import UsageTracker
-from claude_code.services.compact import AutoCompactTracker
-from claude_code.tasks.manager import TaskManager
-from claude_code.tools.agent_tool import AgentTool
-from claude_code.tools.agent_tool.constants import AGENT_TOOL_NAME
-from claude_code.tools.base import BaseTool, ToolParameter, ToolParameterType, ToolResult
+from AgentX.engine.query_engine import QueryEngine
+from AgentX.permissions.checker import PermissionChecker
+from AgentX.services.api.client import LLMClient
+from AgentX.services.api.usage import UsageTracker
+from AgentX.services.compact import AutoCompactTracker
+from AgentX.tasks.manager import TaskManager
+from AgentX.tools.agent_tool import AgentTool
+from AgentX.tools.agent_tool.constants import AGENT_TOOL_NAME
+from AgentX.tools.base import BaseTool, ToolParameter, ToolParameterType, ToolResult
 
 from conftest import events_of_type, make_real_config
 
@@ -346,22 +346,22 @@ class TestEventFlow:
 
 class TestConstants:
     def test_agent_tool_name(self) -> None:
-        from claude_code.tools.agent_tool.constants import AGENT_TOOL_NAME
+        from AgentX.tools.agent_tool.constants import AGENT_TOOL_NAME
 
         assert AGENT_TOOL_NAME == "Agent"
 
     def test_legacy_agent_tool_name(self) -> None:
-        from claude_code.tools.agent_tool.constants import LEGACY_AGENT_TOOL_NAME
+        from AgentX.tools.agent_tool.constants import LEGACY_AGENT_TOOL_NAME
 
         assert LEGACY_AGENT_TOOL_NAME == "Task"
 
     def test_verification_agent_type(self) -> None:
-        from claude_code.tools.agent_tool.constants import VERIFICATION_AGENT_TYPE
+        from AgentX.tools.agent_tool.constants import VERIFICATION_AGENT_TYPE
 
         assert VERIFICATION_AGENT_TYPE == "verification"
 
     def test_one_shot_builtin_types(self) -> None:
-        from claude_code.tools.agent_tool.constants import ONE_SHOT_BUILTIN_AGENT_TYPES
+        from AgentX.tools.agent_tool.constants import ONE_SHOT_BUILTIN_AGENT_TYPES
 
         assert isinstance(ONE_SHOT_BUILTIN_AGENT_TYPES, frozenset)
         assert "Explore" in ONE_SHOT_BUILTIN_AGENT_TYPES
@@ -370,7 +370,7 @@ class TestConstants:
 
 class TestAgentMemoryScope:
     def test_scope_values(self) -> None:
-        from claude_code.tools.agent_tool.memory import AgentMemoryScope
+        from AgentX.tools.agent_tool.memory import AgentMemoryScope
 
         assert AgentMemoryScope.USER == "user"
         assert AgentMemoryScope.PROJECT == "project"
@@ -379,28 +379,28 @@ class TestAgentMemoryScope:
 
 class TestMemoryDirPaths:
     def test_user_scope_path(self) -> None:
-        from claude_code.tools.agent_tool.memory import AgentMemoryScope, get_agent_memory_dir
+        from AgentX.tools.agent_tool.memory import AgentMemoryScope, get_agent_memory_dir
 
         result = get_agent_memory_dir("test-agent", AgentMemoryScope.USER)
-        expected = os.path.join(Path.home(), ".claude", "agent-memory", "test-agent") + os.sep
+        expected = os.path.join(Path.home(), ".agentx", "agent-memory", "test-agent") + os.sep
         assert result == expected
 
     def test_project_scope_path(self) -> None:
-        from claude_code.tools.agent_tool.memory import AgentMemoryScope, get_agent_memory_dir
+        from AgentX.tools.agent_tool.memory import AgentMemoryScope, get_agent_memory_dir
 
         result = get_agent_memory_dir("test-agent", AgentMemoryScope.PROJECT, cwd="/tmp/proj")
-        expected = os.path.join("/tmp/proj", ".claude", "agent-memory", "test-agent") + os.sep
+        expected = os.path.join("/tmp/proj", ".agentx", "agent-memory", "test-agent") + os.sep
         assert result == expected
 
     def test_local_scope_path(self) -> None:
-        from claude_code.tools.agent_tool.memory import AgentMemoryScope, get_agent_memory_dir
+        from AgentX.tools.agent_tool.memory import AgentMemoryScope, get_agent_memory_dir
 
         result = get_agent_memory_dir("test-agent", AgentMemoryScope.LOCAL, cwd="/tmp/proj")
-        expected = os.path.join("/tmp/proj", ".claude", "agent-memory-local", "test-agent") + os.sep
+        expected = os.path.join("/tmp/proj", ".agentx", "agent-memory-local", "test-agent") + os.sep
         assert result == expected
 
     def test_colon_sanitization(self) -> None:
-        from claude_code.tools.agent_tool.memory import AgentMemoryScope, get_agent_memory_dir
+        from AgentX.tools.agent_tool.memory import AgentMemoryScope, get_agent_memory_dir
 
         result = get_agent_memory_dir("plugin:my-agent", AgentMemoryScope.USER)
         assert "plugin-my-agent" in result
@@ -409,30 +409,30 @@ class TestMemoryDirPaths:
 
 class TestIsAgentMemoryPath:
     def test_user_scope_detected(self) -> None:
-        from claude_code.tools.agent_tool.memory import is_agent_memory_path
+        from AgentX.tools.agent_tool.memory import is_agent_memory_path
 
-        path = os.path.join(Path.home(), ".claude", "agent-memory", "test", "MEMORY.md")
+        path = os.path.join(Path.home(), ".agentx", "agent-memory", "test", "MEMORY.md")
         assert is_agent_memory_path(path) is True
 
     def test_unrelated_path_rejected(self) -> None:
-        from claude_code.tools.agent_tool.memory import is_agent_memory_path
+        from AgentX.tools.agent_tool.memory import is_agent_memory_path
 
         assert is_agent_memory_path("/tmp/random/file.txt") is False
 
 
 class TestLoadAgentMemoryPrompt:
     def test_empty_dir_returns_basic_prompt(self) -> None:
-        from claude_code.tools.agent_tool.memory import AgentMemoryScope, load_agent_memory_prompt
+        from AgentX.tools.agent_tool.memory import AgentMemoryScope, load_agent_memory_prompt
 
         with tempfile.TemporaryDirectory() as tmpdir:
             result = load_agent_memory_prompt("test-agent", AgentMemoryScope.PROJECT, cwd=tmpdir)
             assert "Persistent Agent Memory" in result
 
     def test_reads_md_files(self) -> None:
-        from claude_code.tools.agent_tool.memory import AgentMemoryScope, load_agent_memory_prompt
+        from AgentX.tools.agent_tool.memory import AgentMemoryScope, load_agent_memory_prompt
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            mem_dir = os.path.join(tmpdir, ".claude", "agent-memory", "test-agent")
+            mem_dir = os.path.join(tmpdir, ".agentx", "agent-memory", "test-agent")
             os.makedirs(mem_dir)
             with open(os.path.join(mem_dir, "notes.md"), "w") as f:
                 f.write("Important note")
@@ -443,27 +443,27 @@ class TestLoadAgentMemoryPrompt:
 
 class TestDefinitionEnums:
     def test_agent_source_values(self) -> None:
-        from claude_code.tools.agent_tool.definitions import AgentSource
+        from AgentX.tools.agent_tool.definitions import AgentSource
 
         assert AgentSource.BUILT_IN == "built-in"
         assert AgentSource.USER_SETTINGS == "userSettings"
 
     def test_isolation_mode(self) -> None:
-        from claude_code.tools.agent_tool.definitions import IsolationMode
+        from AgentX.tools.agent_tool.definitions import IsolationMode
 
         assert IsolationMode.WORKTREE == "worktree"
 
 
 class TestBaseAgentDefinition:
     def test_minimal_construction(self) -> None:
-        from claude_code.tools.agent_tool.definitions import BaseAgentDefinition
+        from AgentX.tools.agent_tool.definitions import BaseAgentDefinition
 
         agent = BaseAgentDefinition(agent_type="test")
         assert agent.agent_type == "test"
         assert agent.tools is None
 
     def test_system_prompt_callable(self) -> None:
-        from claude_code.tools.agent_tool.definitions import BaseAgentDefinition
+        from AgentX.tools.agent_tool.definitions import BaseAgentDefinition
 
         agent = BaseAgentDefinition(agent_type="test")
         agent._get_system_prompt = lambda **kw: "Hello"
@@ -472,13 +472,13 @@ class TestBaseAgentDefinition:
 
 class TestTypeGuards:
     def test_built_in_detection(self) -> None:
-        from claude_code.tools.agent_tool.definitions import AgentSource, BaseAgentDefinition, is_built_in_agent
+        from AgentX.tools.agent_tool.definitions import AgentSource, BaseAgentDefinition, is_built_in_agent
 
         agent = BaseAgentDefinition(agent_type="t", source=AgentSource.BUILT_IN)
         assert is_built_in_agent(agent) is True
 
     def test_custom_detection(self) -> None:
-        from claude_code.tools.agent_tool.definitions import AgentSource, BaseAgentDefinition, is_custom_agent
+        from AgentX.tools.agent_tool.definitions import AgentSource, BaseAgentDefinition, is_custom_agent
 
         agent = BaseAgentDefinition(agent_type="t", source=AgentSource.USER_SETTINGS)
         assert is_custom_agent(agent) is True
@@ -486,7 +486,7 @@ class TestTypeGuards:
 
 class TestFrontmatterParser:
     def _parse(self, content: str) -> tuple[dict[str, Any], str]:
-        from claude_code.tools.agent_tool.definitions import _parse_frontmatter
+        from AgentX.tools.agent_tool.definitions import _parse_frontmatter
 
         return _parse_frontmatter(content)
 
@@ -515,7 +515,7 @@ class TestFrontmatterParser:
 
 class TestParseAgentFromMarkdown:
     def test_valid_agent(self) -> None:
-        from claude_code.tools.agent_tool.definitions import AgentSource, parse_agent_from_markdown
+        from AgentX.tools.agent_tool.definitions import AgentSource, parse_agent_from_markdown
 
         fm = {"name": "test", "description": "A test", "tools": ["Read"]}
         agent = parse_agent_from_markdown("/p/t.md", "/p", fm, "Prompt", AgentSource.USER_SETTINGS)
@@ -524,14 +524,14 @@ class TestParseAgentFromMarkdown:
         assert agent.get_system_prompt() == "Prompt"
 
     def test_missing_name_returns_none(self) -> None:
-        from claude_code.tools.agent_tool.definitions import AgentSource, parse_agent_from_markdown
+        from AgentX.tools.agent_tool.definitions import AgentSource, parse_agent_from_markdown
 
         agent = parse_agent_from_markdown("/p/t.md", "/p", {"description": "d"}, "B", AgentSource.USER_SETTINGS)
         assert agent is None
 
     def test_memory_auto_injects_file_tools(self) -> None:
-        from claude_code.tools.agent_tool.definitions import AgentSource, parse_agent_from_markdown
-        from claude_code.tools.tool_names import FILE_READ_TOOL_NAME, FILE_WRITE_TOOL_NAME
+        from AgentX.tools.agent_tool.definitions import AgentSource, parse_agent_from_markdown
+        from AgentX.tools.tool_names import FILE_READ_TOOL_NAME, FILE_WRITE_TOOL_NAME
 
         fm = {"name": "m", "description": "d", "tools": ["Bash"], "memory": "user"}
         agent = parse_agent_from_markdown("/p/t.md", "/p", fm, "B", AgentSource.USER_SETTINGS)
@@ -542,7 +542,7 @@ class TestParseAgentFromMarkdown:
 
 class TestActiveAgents:
     def test_later_source_overrides(self) -> None:
-        from claude_code.tools.agent_tool.definitions import (
+        from AgentX.tools.agent_tool.definitions import (
             AgentSource,
             BaseAgentDefinition,
             get_active_agents_from_list,
@@ -557,7 +557,7 @@ class TestActiveAgents:
 
 class TestLoadAgentsDir:
     def test_loads_md_files(self) -> None:
-        from claude_code.tools.agent_tool.definitions import load_agents_dir
+        from AgentX.tools.agent_tool.definitions import load_agents_dir
 
         with tempfile.TemporaryDirectory() as tmpdir:
             content = "---\nname: test-agent\ndescription: A test\n---\nPrompt."
@@ -568,26 +568,26 @@ class TestLoadAgentsDir:
             assert agents[0].agent_type == "test-agent"
 
     def test_nonexistent_dir(self) -> None:
-        from claude_code.tools.agent_tool.definitions import load_agents_dir
+        from AgentX.tools.agent_tool.definitions import load_agents_dir
 
         assert load_agents_dir("/nonexistent/xyz") == []
 
 
 class TestBuiltIn:
     def test_general_purpose_agent(self) -> None:
-        from claude_code.tools.agent_tool.built_in import GENERAL_PURPOSE_AGENT
+        from AgentX.tools.agent_tool.built_in import GENERAL_PURPOSE_AGENT
 
         assert GENERAL_PURPOSE_AGENT.agent_type == "general-purpose"
         assert GENERAL_PURPOSE_AGENT.tools == ["*"]
 
     def test_system_prompt_has_content(self) -> None:
-        from claude_code.tools.agent_tool.built_in import GENERAL_PURPOSE_AGENT
+        from AgentX.tools.agent_tool.built_in import GENERAL_PURPOSE_AGENT
 
         prompt = GENERAL_PURPOSE_AGENT.get_system_prompt()
         assert "agent for Claude Code" in prompt
 
     def test_get_built_in_agents(self) -> None:
-        from claude_code.tools.agent_tool.built_in import get_built_in_agents
+        from AgentX.tools.agent_tool.built_in import get_built_in_agents
 
         agents = get_built_in_agents()
         assert len(agents) >= 1
@@ -595,26 +595,26 @@ class TestBuiltIn:
 
 class TestFork:
     def test_fork_agent_type(self) -> None:
-        from claude_code.tools.agent_tool.fork import FORK_AGENT
+        from AgentX.tools.agent_tool.fork import FORK_AGENT
 
         assert FORK_AGENT.agent_type == "fork"
         assert FORK_AGENT.tools == ["*"]
         assert FORK_AGENT.permission_mode == "bubble"
 
     def test_is_in_fork_child_false(self) -> None:
-        from claude_code.tools.agent_tool.fork import is_in_fork_child
+        from AgentX.tools.agent_tool.fork import is_in_fork_child
 
         assert is_in_fork_child([]) is False
         assert is_in_fork_child([UserMessage(content="hello")]) is False
 
     def test_is_in_fork_child_true(self) -> None:
-        from claude_code.tools.agent_tool.fork import FORK_BOILERPLATE_TAG, is_in_fork_child
+        from AgentX.tools.agent_tool.fork import FORK_BOILERPLATE_TAG, is_in_fork_child
 
         msgs = [UserMessage(content=f"<{FORK_BOILERPLATE_TAG}> directive")]
         assert is_in_fork_child(msgs) is True
 
     def test_build_child_message(self) -> None:
-        from claude_code.tools.agent_tool.fork import build_child_message
+        from AgentX.tools.agent_tool.fork import build_child_message
 
         text = build_child_message("Analyze auth")
         assert "Analyze auth" in text
@@ -622,7 +622,7 @@ class TestFork:
         assert "Scope:" in text
 
     def test_build_forked_messages(self) -> None:
-        from claude_code.tools.agent_tool.fork import build_forked_messages
+        from AgentX.tools.agent_tool.fork import build_forked_messages
 
         msgs = build_forked_messages("task X")
         assert len(msgs) >= 1
@@ -630,7 +630,7 @@ class TestFork:
         assert "task X" in msgs[-1].content
 
     def test_build_worktree_notice(self) -> None:
-        from claude_code.tools.agent_tool.fork import build_worktree_notice
+        from AgentX.tools.agent_tool.fork import build_worktree_notice
 
         notice = build_worktree_notice("/parent", "/worktree")
         assert "/parent" in notice
@@ -663,7 +663,7 @@ class TestFilterToolsForAgent:
         ]
 
     def test_disallowed_tools_removed(self) -> None:
-        from claude_code.tools.agent_tool.utils import filter_tools_for_agent
+        from AgentX.tools.agent_tool.utils import filter_tools_for_agent
 
         result = filter_tools_for_agent(self._make_tools(), is_built_in=True)
         names = {t.name for t in result}
@@ -671,15 +671,15 @@ class TestFilterToolsForAgent:
         assert "AskUserQuestion" not in names
 
     def test_mcp_tools_always_allowed(self) -> None:
-        from claude_code.tools.agent_tool.utils import filter_tools_for_agent
+        from AgentX.tools.agent_tool.utils import filter_tools_for_agent
 
         result = filter_tools_for_agent(self._make_tools(), is_built_in=True)
         names = {t.name for t in result}
         assert "mcp__github__list" in names
 
     def test_async_restricts_to_whitelist(self) -> None:
-        from claude_code.tools.agent_tool.utils import filter_tools_for_agent
-        from claude_code.tools.tool_names import ASYNC_AGENT_ALLOWED_TOOLS
+        from AgentX.tools.agent_tool.utils import filter_tools_for_agent
+        from AgentX.tools.tool_names import ASYNC_AGENT_ALLOWED_TOOLS
 
         result = filter_tools_for_agent(self._make_tools(), is_built_in=True, is_async=True)
         for t in result:
@@ -704,16 +704,16 @@ class TestResolveAgentTools:
         return [DummyTool("Read"), DummyTool("Write"), DummyTool("Agent")]
 
     def test_wildcard(self) -> None:
-        from claude_code.tools.agent_tool.definitions import BaseAgentDefinition
-        from claude_code.tools.agent_tool.utils import resolve_agent_tools
+        from AgentX.tools.agent_tool.definitions import BaseAgentDefinition
+        from AgentX.tools.agent_tool.utils import resolve_agent_tools
 
         agent = BaseAgentDefinition(agent_type="t", tools=["*"])
         result = resolve_agent_tools(agent, self._make_tools())
         assert result.has_wildcard is True
 
     def test_explicit_tools(self) -> None:
-        from claude_code.tools.agent_tool.definitions import BaseAgentDefinition
-        from claude_code.tools.agent_tool.utils import resolve_agent_tools
+        from AgentX.tools.agent_tool.definitions import BaseAgentDefinition
+        from AgentX.tools.agent_tool.utils import resolve_agent_tools
 
         agent = BaseAgentDefinition(agent_type="t", tools=["Read"])
         result = resolve_agent_tools(agent, self._make_tools())
@@ -721,16 +721,16 @@ class TestResolveAgentTools:
         assert {t.name for t in result.resolved_tools} == {"Read"}
 
     def test_invalid_tools_tracked(self) -> None:
-        from claude_code.tools.agent_tool.definitions import BaseAgentDefinition
-        from claude_code.tools.agent_tool.utils import resolve_agent_tools
+        from AgentX.tools.agent_tool.definitions import BaseAgentDefinition
+        from AgentX.tools.agent_tool.utils import resolve_agent_tools
 
         agent = BaseAgentDefinition(agent_type="t", tools=["Read", "NonExistent"])
         result = resolve_agent_tools(agent, self._make_tools())
         assert "NonExistent" in result.invalid_tools
 
     def test_agent_allowed_types_parsed(self) -> None:
-        from claude_code.tools.agent_tool.definitions import BaseAgentDefinition
-        from claude_code.tools.agent_tool.utils import resolve_agent_tools
+        from AgentX.tools.agent_tool.definitions import BaseAgentDefinition
+        from AgentX.tools.agent_tool.utils import resolve_agent_tools
 
         agent = BaseAgentDefinition(agent_type="t", tools=["Read", "Agent(worker, researcher)"])
         result = resolve_agent_tools(agent, self._make_tools())
@@ -739,13 +739,13 @@ class TestResolveAgentTools:
 
 class TestFinalizeAgentTool:
     def test_no_messages_fallback(self) -> None:
-        from claude_code.tools.agent_tool.utils import finalize_agent_tool
+        from AgentX.tools.agent_tool.utils import finalize_agent_tool
 
         result = finalize_agent_tool([], "id")
         assert result["content"][0]["text"] == "(agent produced no output)"
 
     def test_extracts_text(self) -> None:
-        from claude_code.tools.agent_tool.utils import finalize_agent_tool
+        from AgentX.tools.agent_tool.utils import finalize_agent_tool
 
         block = MagicMock()
         block.type = "text"
@@ -761,29 +761,29 @@ class TestFinalizeAgentTool:
 
 class TestPrompt:
     def test_default_loads_built_in(self) -> None:
-        from claude_code.tools.agent_tool.prompt import get_prompt
+        from AgentX.tools.agent_tool.prompt import get_prompt
 
         prompt = get_prompt()
         assert "general-purpose" in prompt
 
     def test_coordinator_shorter(self) -> None:
-        from claude_code.tools.agent_tool.prompt import get_prompt
+        from AgentX.tools.agent_tool.prompt import get_prompt
 
         full = get_prompt(is_coordinator=False)
         coord = get_prompt(is_coordinator=True)
         assert len(coord) < len(full)
 
     def test_custom_agents_included(self) -> None:
-        from claude_code.tools.agent_tool.definitions import BaseAgentDefinition
-        from claude_code.tools.agent_tool.prompt import get_prompt
+        from AgentX.tools.agent_tool.definitions import BaseAgentDefinition
+        from AgentX.tools.agent_tool.prompt import get_prompt
 
         agents = [BaseAgentDefinition(agent_type="custom", when_to_use="Custom", tools=["Bash"])]
         prompt = get_prompt(agent_definitions=agents)
         assert "custom" in prompt
 
     def test_allowed_filter(self) -> None:
-        from claude_code.tools.agent_tool.definitions import BaseAgentDefinition
-        from claude_code.tools.agent_tool.prompt import get_prompt
+        from AgentX.tools.agent_tool.definitions import BaseAgentDefinition
+        from AgentX.tools.agent_tool.prompt import get_prompt
 
         agents = [
             BaseAgentDefinition(agent_type="agent_yes_type", when_to_use="y"),
@@ -828,7 +828,7 @@ class TestAgentToolClass:
         assert "engine" in result.data.lower()
 
     async def test_fork_guard(self) -> None:
-        from claude_code.tools.agent_tool.fork import FORK_BOILERPLATE_TAG
+        from AgentX.tools.agent_tool.fork import FORK_BOILERPLATE_TAG
 
         tool = AgentTool()
         engine = MagicMock()
@@ -843,24 +843,24 @@ class TestAgentToolClass:
 
 class TestShouldRunAsync:
     def test_explicit_background(self) -> None:
-        from claude_code.tools.agent_tool.tool import _should_run_async
+        from AgentX.tools.agent_tool.tool import _should_run_async
 
         assert _should_run_async(run_in_background=True, agent_definition=None, is_fork=False) is True
 
     def test_default_is_sync(self) -> None:
-        from claude_code.tools.agent_tool.tool import _should_run_async
+        from AgentX.tools.agent_tool.tool import _should_run_async
 
         assert _should_run_async(run_in_background=False, agent_definition=None, is_fork=False) is False
 
 
 class TestResolveAgentDefinition:
     def test_empty_returns_none(self) -> None:
-        from claude_code.tools.agent_tool.tool import _resolve_agent_definition
+        from AgentX.tools.agent_tool.tool import _resolve_agent_definition
 
         assert _resolve_agent_definition("", "/tmp") is None
 
     def test_builtin_resolves(self) -> None:
-        from claude_code.tools.agent_tool.tool import _resolve_agent_definition
+        from AgentX.tools.agent_tool.tool import _resolve_agent_definition
 
         result = _resolve_agent_definition("general-purpose", "/tmp")
         assert result is not None
@@ -869,17 +869,17 @@ class TestResolveAgentDefinition:
 
 class TestRunAgentHelpers:
     def test_build_system_prompt(self) -> None:
-        from claude_code.tools.agent_tool.definitions import BaseAgentDefinition
-        from claude_code.tools.agent_tool.run_agent import _build_agent_system_prompt
+        from AgentX.tools.agent_tool.definitions import BaseAgentDefinition
+        from AgentX.tools.agent_tool.run_agent import _build_agent_system_prompt
 
         agent = BaseAgentDefinition(agent_type="test")
         agent._get_system_prompt = lambda **kw: "Custom"
         assert _build_agent_system_prompt(agent) == "Custom"
 
     def test_empty_prompt_falls_back(self) -> None:
-        from claude_code.constants.prompts import DEFAULT_AGENT_PROMPT
-        from claude_code.tools.agent_tool.definitions import BaseAgentDefinition
-        from claude_code.tools.agent_tool.run_agent import _build_agent_system_prompt
+        from AgentX.constants.prompts import DEFAULT_AGENT_PROMPT
+        from AgentX.tools.agent_tool.definitions import BaseAgentDefinition
+        from AgentX.tools.agent_tool.run_agent import _build_agent_system_prompt
 
         agent = BaseAgentDefinition(agent_type="test")
         agent._get_system_prompt = lambda **kw: ""
@@ -888,12 +888,12 @@ class TestRunAgentHelpers:
 
 class TestResumeHelpers:
     def test_read_metadata_nonexistent(self) -> None:
-        from claude_code.tools.agent_tool.resume import _read_agent_metadata
+        from AgentX.tools.agent_tool.resume import _read_agent_metadata
 
         assert _read_agent_metadata(Path("/nonexistent/path.json")) == {}
 
     def test_read_metadata_valid(self) -> None:
-        from claude_code.tools.agent_tool.resume import _read_agent_metadata
+        from AgentX.tools.agent_tool.resume import _read_agent_metadata
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"agent_type": "worker"}, f)
@@ -903,7 +903,7 @@ class TestResumeHelpers:
             os.unlink(f.name)
 
     def test_clean_transcript_removes_orphaned(self) -> None:
-        from claude_code.tools.agent_tool.resume import _clean_transcript_messages
+        from AgentX.tools.agent_tool.resume import _clean_transcript_messages
 
         messages = [
             {"role": "user", "content": "hello"},
@@ -915,7 +915,7 @@ class TestResumeHelpers:
         assert len(assistant_msgs) == 0
 
     def test_clean_transcript_keeps_matched(self) -> None:
-        from claude_code.tools.agent_tool.resume import _clean_transcript_messages
+        from AgentX.tools.agent_tool.resume import _clean_transcript_messages
 
         messages = [
             {"role": "user", "content": "hello"},
@@ -929,7 +929,7 @@ class TestResumeHelpers:
 
 class TestAsyncLifecycle:
     async def test_success_path(self) -> None:
-        from claude_code.tools.agent_tool.utils import run_async_agent_lifecycle
+        from AgentX.tools.agent_tool.utils import run_async_agent_lifecycle
 
         results: list[Any] = []
 
@@ -946,7 +946,7 @@ class TestAsyncLifecycle:
         assert len(results) == 1
 
     async def test_error_path(self) -> None:
-        from claude_code.tools.agent_tool.utils import run_async_agent_lifecycle
+        from AgentX.tools.agent_tool.utils import run_async_agent_lifecycle
 
         errors: list[str] = []
 
@@ -966,12 +966,12 @@ class TestAsyncLifecycle:
 
 class TestPackageIntegration:
     def test_package_exports(self) -> None:
-        from claude_code.tools.agent_tool import AgentTool
+        from AgentX.tools.agent_tool import AgentTool
 
-        assert AgentTool.__module__ == "claude_code.tools.agent_tool.tool"
+        assert AgentTool.__module__ == "AgentX.tools.agent_tool.tool"
 
     def test_tools_registry(self) -> None:
-        from claude_code.tools import get_all_base_tools
+        from AgentX.tools import get_all_base_tools
 
         tools = get_all_base_tools()
         agent_tools = [t for t in tools if t.name == "Agent"]
@@ -981,15 +981,15 @@ class TestPackageIntegration:
         import importlib
 
         for mod in [
-            "claude_code.tools.agent_tool.constants",
-            "claude_code.tools.agent_tool.memory",
-            "claude_code.tools.agent_tool.definitions",
-            "claude_code.tools.agent_tool.built_in",
-            "claude_code.tools.agent_tool.fork",
-            "claude_code.tools.agent_tool.utils",
-            "claude_code.tools.agent_tool.prompt",
-            "claude_code.tools.agent_tool.run_agent",
-            "claude_code.tools.agent_tool.resume",
-            "claude_code.tools.agent_tool.tool",
+            "AgentX.tools.agent_tool.constants",
+            "AgentX.tools.agent_tool.memory",
+            "AgentX.tools.agent_tool.definitions",
+            "AgentX.tools.agent_tool.built_in",
+            "AgentX.tools.agent_tool.fork",
+            "AgentX.tools.agent_tool.utils",
+            "AgentX.tools.agent_tool.prompt",
+            "AgentX.tools.agent_tool.run_agent",
+            "AgentX.tools.agent_tool.resume",
+            "AgentX.tools.agent_tool.tool",
         ]:
             assert importlib.import_module(mod) is not None

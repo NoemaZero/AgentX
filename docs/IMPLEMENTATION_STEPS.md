@@ -91,9 +91,9 @@
 claude-code-py/
   ├── pyproject.toml
   ├── requirements.txt
-  └── claude_code/
+  └── AgentX/
       ├── __init__.py
-      ├── __main__.py           # python -m claude_code 入口
+      ├── __main__.py           # python -m AgentX 入口
       ├── main.py               # CLI 主程序（对应 main.tsx）
       ├── config.py             # 配置管理（对应 entrypoints/init.ts）
       ├── types.py              # 核心类型（对应 Tool.ts + types/）

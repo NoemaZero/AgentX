@@ -13,16 +13,16 @@ from typing import Any
 
 import pytest
 
-from claude_code.data_types import (
+from AgentX.data_types import (
     AssistantMessage,
     Message,
     StreamEvent,
     StreamEventType,
     UserMessage,
 )
-from claude_code.engine.query import TransitionReason
-from claude_code.services.api.client import StreamResult
-from claude_code.utils.hooks import HookManager
+from AgentX.engine.query import TransitionReason
+from AgentX.services.api.client import StreamResult
+from AgentX.utils.hooks import HookManager
 
 from conftest import (
     GetWeatherTool,

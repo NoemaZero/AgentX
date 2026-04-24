@@ -5,12 +5,12 @@
   <img src="https://img.shields.io/badge/AsyncIO-native-purple" alt="AsyncIO">
 </p>
 
-<h1 align="center">Claude Code Python</h1>
+<h1 align="center">AgentX</h1>
 
 <p align="center">
-  <strong>Anthropic の <a href="https://github.com/anthropics/claude-code">Claude Code</a> を忠実に Python へ移植 — 公式 AI コーディング CLI ツール。</strong>
+  <strong>カスタマイズ可能で高度に抽象化された、プロダクショングレードのデジタルワーカー基盤</strong>
   <br/>
-  TypeScript から Python への厳密な 1:1 アーキテクチャ翻訳。任意の OpenAI 互換プロバイダーで動作。
+  AgentX アーキテクチャの厳密な Python 翻訳。あらゆる OpenAI 互換 LLM バックエンドに接続可能。
 </p>
 
 <p align="center">
@@ -18,16 +18,36 @@
 </p>
 
 <p align="center">
-  <img src="docs/hello.gif" alt="Claude Code Python — インタラクティブ REPL" width="720">
+  <img src="docs/hello.gif" alt="AgentX — インタラクティブ REPL" width="720">
 </p>
+
+---
+
+## ヴィジョン
+
+**カスタマイズ可能で高度に抽象化された、プロダクショングレードのデジタルワーカーを。**
+
+AgentX は単なる AI コーディング CLI ではありません。その目標は、あらゆる個人とチームがオンデマンドでカスタマイズできる**デジタルワーカー基盤**となることです。
+
+| 次元 | 目標 |
+|------|------|
+| **カスタマイズ可能** | `AGENTX_*` 環境変数、CLAUDE.md ルール体系、MCP プロトコル、カスタム Agent 定義により、各ユーザーが専用のインテリジェントアシスタントを構築。ブランド、動作、ツールスタックのすべてを置換可能。 |
+| **高度に抽象化** | 再帰的自己相似 Agent アーキテクチャ：メインスレッドとサブ Agent が同一の `query()` ループを共有。Provider パターンが LLM バックエンドを完全に分離——あらゆる OpenAI 互換 API で動作。7 種の権限モードによる段階的制御。 |
+| **プロダクショングレード** | 完全非同期 asyncio エンジン、ストリーミングレスポンス、Pydantic 厳格検証、自動コンテキスト圧縮、セッション永続化、マルチ Agent 連携、エラー復旧チェーン、Stop Hooks 安全終了——全コンポーネントは TypeScript 原版での検証後に厳密翻訳。 |
+| **デジタルワーカー** | 「チャットボット」ではなく、読み取り・書き込み・実行・検証・自己修正が可能な Agent。Fork バックグラウンドサブ Agent、独立検証 Agent、Teammates マルチ Agent コラボレーション——本物のエンジニアのように作業を完了します。 |
+
+<p align="center">
+  <em>"Don't just chat with AI. Hire it."</em>
+</p>
+
 
 ---
 
 ## なぜこのプロジェクト？
 
-[Claude Code](https://github.com/anthropics/claude-code) は Anthropic 公式のエージェント型コーディング CLI です。ターミナルネイティブの AI アシスタントとして、コードの読み書き・実行をヒューマンインザループの権限制御のもとで行えます。しかし、オリジナルは TypeScript で書かれており、Anthropic SDK に強く依存しています。
+エージェント型コーディング CLI のパラダイムは開発者の生産性を劇的に変革しましたが、既存の実装は特定の SDK とランタイムに密結合しています。**AgentX** はこの結合を断ち切ります。
 
-**Claude Code Python** はオリジナルの TypeScript コードベースを **厳密に一行ずつ翻訳** したものです。すべてのプロンプト、ツール名、パラメータスキーマ、動作フラグはソースからそのまま保持され、ランタイムは Python の非同期エコシステムと OpenAI 互換プロバイダーパターンで再構築されています。つまり、**任意の** LLM バックエンド（OpenAI、DeepSeek、Ollama、vLLM、LiteLLM など）を接続できます。
+**AgentX** はエージェント型コーディング CLI の概念をイディオマティックな Python へ**厳密にアーキテクチャレベルで移植**したものです。すべてのプロンプト、ツール名、パラメータスキーマ、動作フラグを注意深く保持しつつ、ランタイムを Python の非同期エコシステムと OpenAI 互換プロバイダーパターンで再構築——これにより**あらゆる** LLM バックエンド（OpenAI, DeepSeek, Ollama, vLLM, LiteLLM 等）に接続できます。
 
 ### 主要目標
 
@@ -91,8 +111,8 @@
 
 ```bash
 # リポジトリをクローン
-git clone https://github.com/NoemaZero/claude-code-py.git
-cd claude-code-py
+git clone https://github.com/NoemaZero/clawd-agent.git
+cd agentx-py
 
 # 仮想環境を作成
 python -m venv env
@@ -126,35 +146,35 @@ export OPENAI_BASE_URL="http://localhost:11434/v1"
 
 ```bash
 # インタラクティブ REPL
-python -m claude_code
+python -m AgentX
 
 # 単発クエリ（非インタラクティブ）
-python -m claude_code "main.py のバグを修正して"
+python -m AgentX "main.py のバグを修正して"
 
 # モデル / プロバイダーを指定
-python -m claude_code --model gpt-4o
-python -m claude_code --provider deepseek --model deepseek-chat
+python -m AgentX --model gpt-4o
+python -m AgentX --provider deepseek --model deepseek-chat
 
 # 権限モード
-python -m claude_code --permission-mode auto
-python -m claude_code --permission-mode plan
+python -m AgentX --permission-mode auto
+python -m AgentX --permission-mode plan
 
 # 詳細出力
-python -m claude_code -v
+python -m AgentX -v
 ```
 
 またはインストール済み CLI：
 
 ```bash
-claude-code "このコードベースを説明して"
-claude-code --model gpt-4o --max-turns 10
+agentx "このコードベースを説明して"
+agentx --model gpt-4o --max-turns 10
 ```
 
 ---
 
 ## ツールシステム
 
-すべての 30 以上のツールはオリジナルの Claude Code ツール定義の厳密な翻訳であり、名前、説明、パラメータスキーマが完全に保持されています：
+すべての 30 以上のツールはオリジナルの AgentX ツール定義の厳密な翻訳であり、名前、説明、パラメータスキーマが完全に保持されています：
 
 | ツール | 名前 | 説明 |
 |--------|------|------|
@@ -179,7 +199,7 @@ claude-code --model gpt-4o --max-turns 10
 
 ## LLM プロバイダーサポート
 
-Claude Code Python は **OpenAI 互換プロバイダーパターン** を採用しており、ほぼすべての LLM バックエンドで動作します：
+AgentX は **OpenAI 互換プロバイダーパターン** を採用しており、ほぼすべての LLM バックエンドで動作します：
 
 | プロバイダー | 設定 |
 |-------------|------|
@@ -194,10 +214,10 @@ Claude Code Python は **OpenAI 互換プロバイダーパターン** を採用
 
 ## デモ：五目並べ（Gomoku）
 
-[`example/gomoku/`](example/gomoku/) ディレクトリには、**Claude Code Python で完全に生成された** 五目並べゲームが収録されています。盤面の描画から AI 対戦ロジックまで、すべて自動生成です。
+[`example/gomoku/`](example/gomoku/) ディレクトリには、**AgentX で完全に生成された** 五目並べゲームが収録されています。盤面の描画から AI 対戦ロジックまで、すべて自動生成です。
 
 <p align="center">
-  <img src="docs/gomoku.jpg" alt="五目並べゲームデモ — Claude Code Python で生成" width="640">
+  <img src="docs/gomoku.jpg" alt="五目並べゲームデモ — AgentX で生成" width="640">
 </p>
 
 ### 生成されたゲームの特徴：
@@ -214,7 +234,7 @@ Claude Code Python は **OpenAI 互換プロバイダーパターン** を採用
 open example/gomoku/index.html
 ```
 
-このデモはエージェントワークフロー全体を示しています：Claude Code Python が要件を読み取り、アーキテクチャを計画し、HTML/CSS/JS ファイルを書き、ゲームが完成するまで反復します — すべてツールシステムを通じて実行されます。
+このデモはエージェントワークフロー全体を示しています：AgentX が要件を読み取り、アーキテクチャを計画し、HTML/CSS/JS ファイルを書き、ゲームが完成するまで反復します — すべてツールシステムを通じて実行されます。
 
 ---
 
@@ -237,7 +257,7 @@ open example/gomoku/index.html
 ## プロジェクト構造
 
 ```
-claude_code/
+AgentX/
 ├── main.py                 # CLI エントリポイント (→ main.tsx)
 ├── config.py               # 設定管理 (→ entrypoints/init.ts)
 ├── data_types.py           # コア型 (→ Tool.ts + types/)
@@ -314,10 +334,10 @@ pip install -e ".[dev]"
 pytest
 
 # リント
-ruff check claude_code/
+ruff check AgentX/
 
 # 型チェック
-mypy claude_code/
+mypy AgentX/
 ```
 
 ---
@@ -347,5 +367,5 @@ mypy claude_code/
 ---
 
 <p align="center">
-  <sub><a href="https://github.com/anthropics/claude-code">Anthropic Claude Code</a> TypeScript ソースからの厳密翻訳 — Python エコシステムのために再構築。</sub>
+  <sub>Python エコシステムのために構築 — オープンソース、プロバイダー非依存。</sub>
 </p>

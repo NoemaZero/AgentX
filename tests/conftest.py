@@ -14,18 +14,18 @@ from typing import Any
 import pytest
 from dotenv import load_dotenv
 
-from claude_code.config import Config, load_config
-from claude_code.data_types import (
+from AgentX.config import Config, load_config
+from AgentX.data_types import (
     Message,
     StreamEvent,
     StreamEventType,
     UserMessage,
 )
-from claude_code.engine.query import QueryParams, query
-from claude_code.permissions.checker import PermissionChecker
-from claude_code.services.api.client import LLMClient
-from claude_code.tools.base import BaseTool, ToolParameter, ToolParameterType, ToolResult
-from claude_code.utils.hooks import HookManager
+from AgentX.engine.query import QueryParams, query
+from AgentX.permissions.checker import PermissionChecker
+from AgentX.services.api.client import LLMClient
+from AgentX.tools.base import BaseTool, ToolParameter, ToolParameterType, ToolResult
+from AgentX.utils.hooks import HookManager
 
 # ---------------------------------------------------------------------------
 # .env loader

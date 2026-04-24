@@ -25,10 +25,10 @@ dev = [
 ]
 
 [project.scripts]
-claude-code = "claude_code.main:main"
+claude-code = "AgentX.main:main"
 
 [tool.setuptools.packages.find]
-include = ["claude_code*"]
+include = ["AgentX*"]
 
 [tool.ruff]
 line-length = 120
