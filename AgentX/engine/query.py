@@ -27,7 +27,6 @@ from AgentX.data_types import (
     Message,
     StreamEvent,
     StreamEventType,
-    ToolResultMessage,
     UserMessage,
 )
 from AgentX.pydantic_models import FrozenModel, MutableModel
@@ -180,7 +179,6 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
         # ── Step 3–4: Call streaming API ──
         assistant_msg: AssistantMessage | None = None
         stream_result: StreamResult | None = None
-        api_error: Exception | None = None
         api_error_str: str | None = None
         withheld_prompt_too_long: bool = False
         withheld_max_output_tokens: bool = False
@@ -205,7 +203,6 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
                 elif event.type == StreamEventType.ERROR:
                     api_error_str = str(event.data)
         except Exception as exc:
-            api_error = exc
             api_error_str = str(exc)
             logger.error("API stream error: %s", api_error_str)
 
@@ -351,6 +348,7 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
             yield StreamEvent(type=StreamEventType.TOOL_USE, data={
                 "id": tc.get("id", ""),
                 "name": func.get("name", ""),
+                "arguments": func.get("arguments", "{}"),
             })
 
         tool_results = await run_tools(

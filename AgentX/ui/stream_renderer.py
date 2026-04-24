@@ -14,6 +14,7 @@ from rich.markdown import Markdown
 from rich.text import Text
 
 from AgentX.data_types import StreamEvent, StreamEventType
+from AgentX.ui.renderer import render_tool_use
 
 
 class StreamRenderer:
@@ -90,16 +91,20 @@ class StreamRenderer:
         self._has_streamed_content = True
 
     async def _render_tool_use(self, data: Any) -> None:
-        """Render a tool use indicator.
+        """Render a tool use indicator with parameters.
 
         Args:
-            data: Tool use data, expected to be a dict with 'name' and optional 'id'.
+            data: Tool use data, expected to be a dict with 'name', optional 'id', and 'arguments'.
         """
         await self._flush_buffer()
         tool_name = "?"
+        tool_id = ""
+        arguments = None
         if isinstance(data, dict):
             tool_name = data.get("name", "?")
-        self.console.print(Text(f"  ⚡ {tool_name}", style="bold cyan"))
+            tool_id = data.get("id", "")
+            arguments = data.get("arguments")
+        render_tool_use(tool_name, tool_id, arguments)
 
     async def _render_tool_result(self, data: Any) -> None:
         """Render a tool result.
@@ -119,7 +124,7 @@ class StreamRenderer:
         display = content[:2000] + "..." if len(content) > 2000 else content
 
         style = "red" if is_error else "dim"
-        self.console.print(Text(f"  ← tool: ", style="bold dim"), end="")
+        self.console.print(Text("  ← tool: ", style="bold dim"), end="")
         self.console.print(Text(display, style=style))
 
     async def _render_error(self, data: Any) -> None:
