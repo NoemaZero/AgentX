@@ -129,6 +129,9 @@ class CustomProvider(LLMProvider):
         启用思考模式时（extra_body 中 enable_thinking=True），
         自动检测 <think>/</ think> 标记并分发 THINKING_* 事件。
         """
+        if extra_body is None:
+            # extra_body = dict(_THINKING_DISABLED_BODY)
+            extra_body = {"chat_template_kwargs": {"enable_thinking": True}}
         enable_thinking = (
             (extra_body or {}).get("chat_template_kwargs", {}).get("enable_thinking", False)
         )

@@ -2,7 +2,7 @@
 
 This module provides a StreamRenderer class that processes StreamEvent objects
 and renders them incrementally, with proper handling of content deltas,
-tool execution indicators, and errors.
+tool execution indicators, errors, and thinking status.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ class StreamRenderer:
         console: Rich Console instance for output.
         _buffer: Accumulated text deltas for the current assistant turn.
         _in_tool_execution: Whether a tool is currently being executed.
+        _thinking_active: Whether the model is currently in thinking mode.
     """
 
     def __init__(self, console: Console | None = None) -> None:
@@ -40,6 +41,9 @@ class StreamRenderer:
         self._buffer: str = ""
         self._in_tool_execution: bool = False
         self._has_streamed_content: bool = False
+        self._thinking_active: bool = False
+        self._thinking_buffer: str = ""
+        self._thinking_char_count: int = 0
 
     async def render_event(self, event: StreamEvent) -> None:
         """Render a single stream event.
@@ -52,6 +56,10 @@ class StreamRenderer:
         """
         if event.type == StreamEventType.CONTENT_DELTA:
             await self._render_content_delta(str(event.data))
+        elif event.type == StreamEventType.THINKING_DELTA:
+            await self._render_thinking_delta(event.data)
+        elif event.type == StreamEventType.THINKING_END:
+            await self._render_thinking_end()
         elif event.type == StreamEventType.TOOL_USE:
             await self._render_tool_use(event.data)
         elif event.type == StreamEventType.TOOL_RESULT:
@@ -68,6 +76,38 @@ class StreamRenderer:
             await self._flush_buffer()
         # Other event types are ignored for now
 
+    async def _render_thinking_delta(self, data: Any) -> None:
+        """Print thinking content with elegant styling as it arrives."""
+        text = str(data)
+        if not self._thinking_active:
+            self._thinking_active = True
+            self.console.print(Text("💭 Thinking:", style="bold cyan"))
+        self._thinking_char_count += len(text)
+        self._thinking_buffer += text
+        # Print completed lines (ending with newline)
+        while "\n" in self._thinking_buffer:
+            idx = self._thinking_buffer.index("\n")
+            line = self._thinking_buffer[:idx]
+            self._thinking_buffer = self._thinking_buffer[idx + 1:]
+            if line.strip():
+                self.console.print(Text(f"  {line}", style="italic cyan"))
+            else:
+                self.console.print()
+
+    async def _render_thinking_end(self) -> None:
+        """End thinking section with completion status."""
+        if self._thinking_active:
+            # Flush any remaining text in buffer
+            if self._thinking_buffer.strip():
+                self.console.print(Text(f"  {self._thinking_buffer}", style="italic cyan"))
+            self._thinking_buffer = ""
+            self.console.print(
+                Text(f"  ✓ Thinking complete ({self._thinking_char_count:,} chars)", style="dim green")
+            )
+            self.console.print(Text("  " + "─" * 40, style="dim"))
+            self._thinking_active = False
+            self._thinking_char_count = 0
+
     async def render_error(self, message: str) -> None:
         """Render an error message directly (not from a stream event).
 
@@ -75,6 +115,14 @@ class StreamRenderer:
             message: Error message to display.
         """
         await self._render_error(message)
+
+    async def _render_error(self, data: Any) -> None:
+        """Render an error event (stops thinking if active)."""
+        if self._thinking_active:
+            await self._render_thinking_end()
+        message = self._sanitize(str(data))
+        from rich.panel import Panel
+        self.console.print(Panel(message, title="Error", border_style="red"))
 
     async def _render_content_delta(self, text: str) -> None:
         """Render a content delta (partial assistant response).
@@ -126,17 +174,6 @@ class StreamRenderer:
         style = "red" if is_error else "dim"
         self.console.print(Text("  ← tool: ", style="bold dim"), end="")
         self.console.print(Text(display, style=style))
-
-    async def _render_error(self, data: Any) -> None:
-        """Render an error message.
-
-        Args:
-            data: Error data, typically a string message.
-        """
-        await self._flush_buffer()
-        message = self._sanitize(str(data))
-        from rich.panel import Panel
-        self.console.print(Panel(message, title="Error", border_style="red"))
 
     async def _render_max_turns_reached(self) -> None:
         """Render a maximum turns reached notification."""
