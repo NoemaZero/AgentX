@@ -16,6 +16,7 @@ import httpx
 from AgentX.data_types import ToolResult
 from AgentX.tools.base import BaseTool, ToolParameter
 from AgentX.tools.tool_names import WEB_SEARCH_TOOL_NAME
+from AgentX.constants.identity import get_app_name
 
 logger = logging.getLogger(__name__)
 
@@ -94,10 +95,10 @@ def _get_current_month_year() -> str:
 
 
 def get_web_search_description() -> str:
-    return f"""- Allows Claude to search the web and use the results to inform responses
+    return f"""- Allows {get_app_name()} to search the web and use the results to inform responses
 - Provides up-to-date information for current events and recent data
 - Returns search result information formatted as search result blocks, including links as markdown hyperlinks
-- Use this tool for accessing information beyond Claude's knowledge cutoff
+- Use this tool for accessing information beyond {get_app_name()}'s knowledge cutoff
 - Searches are performed automatically within a single API call
 
 CRITICAL REQUIREMENT - You MUST follow this:
