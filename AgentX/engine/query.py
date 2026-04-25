@@ -185,7 +185,7 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
 
         effective_max_tokens = (
             state.max_output_tokens_override
-            or params.config.max_tokens
+            or params.config.output_tokens
         )
 
         try:

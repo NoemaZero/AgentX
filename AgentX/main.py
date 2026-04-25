@@ -35,8 +35,9 @@ from AgentX.ui.stream_renderer import StreamRenderer
 @click.option("--base-url", envvar="OPENAI_BASE_URL", default=None, help="API base URL")
 @click.option("--provider", "-p", default=None, help="LLM provider (openai, deepseek, custom). Auto-detected if omitted.")
 @click.option("--ssl-verify/--no-ssl-verify", default=None, help="Enable/disable SSL certificate verification (default: from env or True).")
-@click.option("--max-tokens", default=None, type=int, help="Max output tokens")
 @click.option("--max-turns", default=None, type=int, help="Max agentic turns")
+@click.option("--output-tokens", default=8192, type=int, help="Max output tokens (default: 8192)")
+@click.option("--context-tokens", default=128000, type=int, help="Model context window size (overrides model default, default: 128000)")
 @click.option("--cwd", default=None, help="Working directory")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.option(
@@ -55,8 +56,9 @@ def main(
     base_url: str | None,
     provider: str | None,
     ssl_verify: bool,
-    max_tokens: int | None,
+    output_tokens: int | None,
     max_turns: int | None,
+    context_tokens: int | None,
     cwd: str | None,
     verbose: bool,
     permission_mode: str,
@@ -82,8 +84,9 @@ def main(
         base_url=base_url,
         provider=provider,
         ssl_verify=ssl_verify,
-        max_tokens=max_tokens,
+        output_tokens=output_tokens,
         max_turns=max_turns,
+        context_tokens=context_tokens,
         cwd=cwd,
         verbose=verbose,
         permission_mode=PermissionMode(permission_mode),

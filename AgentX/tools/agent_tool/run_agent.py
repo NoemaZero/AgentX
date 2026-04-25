@@ -300,7 +300,7 @@ async def run_agent(
         base_url=config.base_url,
         provider=config.provider,
         ssl_verify=config.ssl_verify,
-        max_tokens=config.max_tokens,
+        output_tokens=config.output_tokens,
         max_turns=max_turns,
         cwd=effective_cwd,
         verbose=config.verbose,

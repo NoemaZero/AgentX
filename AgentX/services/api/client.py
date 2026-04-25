@@ -169,7 +169,7 @@ class LLMClient:
         openai_messages.extend(_messages_to_openai(messages))
 
         effective_temp = temperature if temperature is not None else self._config.temperature
-        effective_max_tokens = max_tokens or self._config.max_tokens or None
+        effective_max_tokens = max_tokens or self._config.output_tokens or None
 
         yield StreamEvent(type=StreamEventType.STREAM_START)
 
@@ -273,7 +273,7 @@ class LLMClient:
         msg = await self._provider.invoke(
             openai_messages,
             tools=tools,
-            max_tokens=self._config.max_tokens or None,
+            max_tokens=self._config.output_tokens or None,
             temperature=self._config.temperature,
         )
 

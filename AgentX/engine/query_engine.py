@@ -47,7 +47,7 @@ class QueryEngine:
         self._usage_tracker = UsageTracker()
         self._auto_compact_tracker = AutoCompactTracker(
             max_context_tokens=self._get_max_context_tokens(),
-            max_output_tokens=self._config.max_tokens
+            max_output_tokens=self._config.output_tokens
         )
         self._task_manager = TaskManager()
 
@@ -73,6 +73,10 @@ class QueryEngine:
 
     def _get_max_context_tokens(self) -> int:
         """Get max context tokens for the current model."""
+        # 优先使用配置中指定的 context_tokens
+        if self._config.context_tokens is not None:
+            return self._config.context_tokens
+
         from AgentX.config import MODEL_CONTEXT_WINDOWS
 
         return MODEL_CONTEXT_WINDOWS.get(self._config.model, 128000)

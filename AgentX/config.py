@@ -21,6 +21,7 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "claude-haiku-4-5-20251001": 200_000,
     "deepseek-chat": 64_000,
     "deepseek-reasoner": 64_000,
+    "tencent/hy3-preview:free": 262100
 }
 
 DEFAULT_MODEL = "deepseek-chat"
@@ -38,8 +39,9 @@ class Config(FrozenModel):
     base_url: str = DEFAULT_BASE_URL
     provider: ProviderType = DEFAULT_PROVIDER
     ssl_verify: bool = True  # SSL 证书验证，所有供应商通用
-    max_tokens: int = DEFAULT_MAX_TOKENS
+    output_tokens: int = DEFAULT_MAX_TOKENS
     max_turns: int = DEFAULT_MAX_TURNS
+    context_tokens: int | None = None  # 上下文窗口大小，None 表示使用模型默认值
     temperature: float = 0.0
     cwd: str = ""
     verbose: bool = False
@@ -57,8 +59,9 @@ def load_config(
     base_url: str | None = None,
     provider: str | None = None,
     ssl_verify: bool | None = None,
-    max_tokens: int | None = None,
+    output_tokens: int | None = None,
     max_turns: int | None = None,
+    context_tokens: int | None = None,
     cwd: str | None = None,
     verbose: bool = False,
     permission_mode: PermissionMode | str = PermissionMode.DEFAULT,
@@ -94,8 +97,9 @@ def load_config(
         base_url=resolved_base_url,
         provider=resolved_provider,
         ssl_verify=resolved_ssl_verify,
-        max_tokens=max_tokens or DEFAULT_MAX_TOKENS,
+        output_tokens=output_tokens or DEFAULT_MAX_TOKENS,
         max_turns=max_turns or DEFAULT_MAX_TURNS,
+        context_tokens=context_tokens,
         cwd=resolved_cwd,
         verbose=verbose,
         permission_mode=resolved_permission_mode,
