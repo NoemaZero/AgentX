@@ -100,6 +100,19 @@ class QueryParams(FrozenModel):
         return cls.model_construct(**kwargs)
 
 
+# ── Helper: parse tool call (matches orchestration.py) ──
+
+
+def _parse_tool_call(tc: dict[str, Any]) -> tuple[str, str, str]:
+    """Parse tool call dict into (tool_call_id, tool_name, arguments_str)."""
+    func = tc.get("function", {})
+    return (
+        tc.get("id", ""),
+        func.get("name", ""),
+        func.get("arguments", "{}"),
+    )
+
+
 # ── Helper: detect error categories from API exceptions ──
 
 def _is_prompt_too_long(exc: Exception) -> bool:
@@ -117,18 +130,82 @@ def _is_max_output_tokens(exc: Exception) -> bool:
     return "max_output_tokens" in msg or "maximum output tokens" in msg
 
 
-def _is_overloaded(exc: Exception) -> bool:
-    """Check for overloaded API error (529)."""
-    status = getattr(exc, "status_code", None)
-    return status == 529
-
-
 def _finish_reason_is_length(result: StreamResult | None) -> bool:
     """Check if finish_reason indicates truncation due to token limit."""
     if result is None:
         return False
     reason = getattr(result, "stop_reason", None)
     return reason == "length"
+
+
+async def _try_reactive_compact(
+    state: QueryState,
+    shared_messages: list[Message],
+    params: QueryParams,
+) -> tuple[bool, StreamEvent | None]:
+    """Attempt reactive compact for prompt-too-long. Returns (should_retry, event)."""
+    if params.auto_compact_tracker is None or state.has_attempted_reactive_compact:
+        return False, None
+    logger.info("Attempting reactive compact for prompt-too-long")
+    compacted = await params.auto_compact_tracker.force_compact(
+        messages=state.messages,
+        system_prompt=params.system_prompt,
+    )
+    if compacted is None:
+        return False, None
+    event = StreamEvent(type=StreamEventType.AUTO_COMPACT, data={
+        "reason": "reactive_compact",
+        "before": len(state.messages),
+        "after": len(compacted),
+    })
+    state.messages = compacted
+    shared_messages.clear()
+    shared_messages.extend(compacted)
+    state.has_attempted_reactive_compact = True
+    state.transition_reason = TransitionReason.REACTIVE_COMPACT_RETRY
+    return True, event
+
+
+async def _try_max_output_tokens_recovery(
+    state: QueryState,
+    shared_messages: list[Message],
+    assistant_msg: AssistantMessage | None,
+    effective_max_tokens: int,
+) -> tuple[bool, StreamEvent | None]:
+    """Attempt max output tokens recovery. Returns (should_retry, event)."""
+    # Level 1: Escalation (cap → 64k)
+    if state.max_output_tokens_override is None and effective_max_tokens <= DEFAULT_MAX_TOKENS_CAP:
+        logger.info(
+            "Escalating max_output_tokens: %d → %d",
+            effective_max_tokens,
+            ESCALATED_MAX_TOKENS,
+        )
+        state.max_output_tokens_override = ESCALATED_MAX_TOKENS
+        state.transition_reason = TransitionReason.MAX_OUTPUT_TOKENS_ESCALATE
+        # Remove the truncated assistant message for clean retry
+        if assistant_msg is not None and state.messages and state.messages[-1] is assistant_msg:
+            state.messages.pop()
+            if shared_messages and shared_messages[-1] is assistant_msg:
+                shared_messages.pop()
+        return True, None
+
+    # Level 2: Multi-turn recovery (inject continue message, max 3 times)
+    if state.max_output_tokens_recovery_count < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT:
+        state.max_output_tokens_recovery_count += 1
+        logger.info(
+            "Max output tokens recovery attempt %d/%d",
+            state.max_output_tokens_recovery_count,
+            MAX_OUTPUT_TOKENS_RECOVERY_LIMIT,
+        )
+        recovery_msg = UserMessage(content=MAX_TOKENS_RECOVERY_MESSAGE)
+        state.messages.append(recovery_msg)
+        shared_messages.append(recovery_msg)
+        state.transition_reason = TransitionReason.MAX_OUTPUT_TOKENS_RECOVERY
+        return True, None
+
+    # Exhausted recovery attempts
+    logger.warning("Max output tokens recovery exhausted (%d attempts)", MAX_OUTPUT_TOKENS_RECOVERY_LIMIT)
+    return False, None
 
 
 async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
@@ -259,27 +336,11 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
             # 8.1: Prompt-too-long (413) three-level recovery
             if withheld_prompt_too_long:
                 # Level 2: Reactive compact
-                if (
-                    params.auto_compact_tracker is not None
-                    and not state.has_attempted_reactive_compact
-                ):
-                    logger.info("Attempting reactive compact for prompt-too-long")
-                    compacted = await params.auto_compact_tracker.force_compact(
-                        messages=state.messages,
-                        system_prompt=params.system_prompt,
-                    )
-                    if compacted is not None:
-                        state.messages = compacted
-                        shared_messages.clear()
-                        shared_messages.extend(compacted)
-                        state.has_attempted_reactive_compact = True
-                        state.transition_reason = TransitionReason.REACTIVE_COMPACT_RETRY
-                        yield StreamEvent(type=StreamEventType.AUTO_COMPACT, data={
-                            "reason": "reactive_compact",
-                            "before": len(state.messages),
-                            "after": len(compacted),
-                        })
-                        continue
+                should_retry, event = await _try_reactive_compact(state, shared_messages, params)
+                if should_retry:
+                    if event is not None:
+                        yield event
+                    continue
 
                 # Level 3: Unrecoverable
                 logger.error("Prompt-too-long: unrecoverable after all recovery attempts")
@@ -291,37 +352,12 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
 
             # 8.2: Max output tokens two-level recovery
             if withheld_max_output_tokens:
-                # Level 1: Escalation (cap → 64k), same request, no meta message
-                if (
-                    state.max_output_tokens_override is None
-                    and effective_max_tokens <= DEFAULT_MAX_TOKENS_CAP
-                ):
-                    logger.info(
-                        "Escalating max_output_tokens: %d → %d",
-                        effective_max_tokens,
-                        ESCALATED_MAX_TOKENS,
-                    )
-                    state.max_output_tokens_override = ESCALATED_MAX_TOKENS
-                    state.transition_reason = TransitionReason.MAX_OUTPUT_TOKENS_ESCALATE
-                    # Remove the truncated assistant message for clean retry
-                    if assistant_msg is not None and state.messages and state.messages[-1] is assistant_msg:
-                        state.messages.pop()
-                        if shared_messages and shared_messages[-1] is assistant_msg:
-                            shared_messages.pop()
-                    continue
-
-                # Level 2: Multi-turn recovery (inject continue message, max 3 times)
-                if state.max_output_tokens_recovery_count < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT:
-                    state.max_output_tokens_recovery_count += 1
-                    logger.info(
-                        "Max output tokens recovery attempt %d/%d",
-                        state.max_output_tokens_recovery_count,
-                        MAX_OUTPUT_TOKENS_RECOVERY_LIMIT,
-                    )
-                    recovery_msg = UserMessage(content=MAX_TOKENS_RECOVERY_MESSAGE)
-                    state.messages.append(recovery_msg)
-                    shared_messages.append(recovery_msg)
-                    state.transition_reason = TransitionReason.MAX_OUTPUT_TOKENS_RECOVERY
+                should_retry, event = await _try_max_output_tokens_recovery(
+                    state, shared_messages, assistant_msg, effective_max_tokens,
+                )
+                if should_retry:
+                    if event is not None:
+                        yield event
                     continue
 
                 # Exhausted recovery attempts
@@ -344,11 +380,11 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
 
         # ── Step 9: Tool execution ──
         for tc in tool_calls:
-            func = tc.get("function", {})
+            tc_id, tool_name, arguments_str = _parse_tool_call(tc)
             yield StreamEvent(type=StreamEventType.TOOL_USE, data={
-                "id": tc.get("id", ""),
-                "name": func.get("name", ""),
-                "arguments": func.get("arguments", "{}"),
+                "id": tc_id,
+                "name": tool_name,
+                "arguments": arguments_str,
             })
 
         tool_results = await run_tools(
