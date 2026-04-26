@@ -158,21 +158,33 @@ class StreamRenderer:
         """Render a tool result.
 
         Args:
-            data: Tool result data, expected to be a dict with 'content' and
-                possibly an error indication.
+            data: Tool result data, expected to be a dict with 'content',
+                'name' (tool name), 'duration_ms' (execution time), and possibly an error indication.
         """
         content = ""
+        tool_name = "tool"
         is_error = False
+        duration_ms = 0.0
         if isinstance(data, dict):
             content = data.get("content", "")
+            tool_name = data.get("name", "tool")
+            duration_ms = data.get("duration_ms", 0.0)
             is_error = content.startswith("Error")
 
         # Sanitize and truncate for display
         content = self._sanitize(content)
         display = content[:2000] + "..." if len(content) > 2000 else content
 
+        # Format duration
+        if duration_ms >= 1000:
+            duration_str = f"{duration_ms / 1000:.2f}s"
+        else:
+            duration_str = f"{duration_ms:.0f}ms"
+
         style = "red" if is_error else "dim"
-        self.console.print(Text("  ← tool: ", style="bold dim"), end="")
+        self.console.print(Text(f"  ← {tool_name} ", style="bold dim"), end="")
+        self.console.print(Text(f"({duration_str})", style="dim cyan"), end="")
+        self.console.print(Text(": ", style="bold dim"), end="")
         self.console.print(Text(display, style=style))
 
     async def _render_max_turns_reached(self) -> None:

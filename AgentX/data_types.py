@@ -276,7 +276,9 @@ class AssistantMessage(FrozenModel):
 class ToolResultMessage(FrozenModel):
     role: MessageRole = MessageRole.TOOL
     tool_call_id: str = ""
+    name: str = ""
     content: str = ""
+    duration_ms: float = 0.0
 
     @field_validator("role", mode="before")
     @classmethod

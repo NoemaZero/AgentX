@@ -222,6 +222,8 @@ class SessionStorage:
                 entry_type="tool_result",
                 data={
                     "tool_call_id": msg.tool_call_id,
+                    "name": msg.name,
+                    "duration_ms": msg.duration_ms,
                     "content": msg.content[:5000],  # Truncate large results
                 },
                 session_id=self.session_id,
@@ -301,6 +303,8 @@ class SessionStorage:
             elif entry.entry_type == "tool_result":
                 messages.append(ToolResultMessage(
                     tool_call_id=entry.data.get("tool_call_id", ""),
+                    name=entry.data.get("name", ""),
+                    duration_ms=entry.data.get("duration_ms", 0.0),
                     content=entry.data.get("content", ""),
                 ))
 

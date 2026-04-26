@@ -167,11 +167,12 @@ async def run_tools_streaming(
             tool_name = func.get("name", "")
 
             if isinstance(result, Exception):
-                msg = ToolResultMessage(tool_call_id=tc_id, content=f"Error: {result}")
+                msg = ToolResultMessage(tool_call_id=tc_id, name=tool_name, content=f"Error: {result}")
                 yield ToolProgressEvent(
                     tool_call_id=tc_id,
                     tool_name=tool_name,
                     status=ToolExecutionStatus.ERROR,
+                    duration_ms=0.0,
                     result_preview=str(result)[:200],
                 )
                 yield msg
@@ -180,6 +181,7 @@ async def run_tools_streaming(
                     tool_call_id=tc_id,
                     tool_name=tool_name,
                     status=ToolExecutionStatus.COMPLETED,
+                    duration_ms=result.duration_ms,
                     result_preview=result.content[:200] if result.content else "",
                 )
                 yield result
@@ -221,7 +223,7 @@ async def run_tools_streaming(
                 status=ToolExecutionStatus.ERROR,
                 result_preview=str(e)[:200],
             )
-            yield ToolResultMessage(tool_call_id=tc_id, content=f"Error: {e}")
+            yield ToolResultMessage(tool_call_id=tc_id, name=tool_name, content=f"Error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -239,15 +241,18 @@ async def _execute_single_tool(
     **kwargs: Any,
 ) -> ToolResultMessage:
     """Execute a single tool call and return a ToolResultMessage."""
+
     tc_id = tool_call.get("id", "")
     func = tool_call.get("function", {})
     tool_name = func.get("name", "")
     arguments_str = func.get("arguments", "{}")
+    start = time.monotonic()
 
     tool = tools_by_name.get(tool_name)
     if tool is None:
         return ToolResultMessage(
             tool_call_id=tc_id,
+            name=tool_name,
             content=f"Error: Unknown tool '{tool_name}'",
         )
 
@@ -257,6 +262,7 @@ async def _execute_single_tool(
     except json.JSONDecodeError as e:
         return ToolResultMessage(
             tool_call_id=tc_id,
+            name=tool_name,
             content=f"Error parsing tool arguments: {e}",
         )
 
@@ -278,7 +284,7 @@ async def _execute_single_tool(
         )
         if perm_result.behavior == "deny":
             msg = perm_result.message or f"Permission denied for tool '{tool_name}'"
-            return ToolResultMessage(tool_call_id=tc_id, content=msg)
+            return ToolResultMessage(tool_call_id=tc_id, name=tool_name, content=msg)
         if perm_result.behavior == "ask":
             # Interactive permission prompt
             if ask_callback is not None:
@@ -291,6 +297,7 @@ async def _execute_single_tool(
                     if decision == PermissionDecision.DENY:
                         return ToolResultMessage(
                             tool_call_id=tc_id,
+                            name=tool_name,
                             content=f"Permission denied by user for tool '{tool_name}'",
                         )
                     if decision == PermissionDecision.ALLOW_SESSION:
@@ -300,6 +307,7 @@ async def _execute_single_tool(
                     logger.warning("Permission ask callback error: %s", ask_exc)
                     return ToolResultMessage(
                         tool_call_id=tc_id,
+                        name=tool_name,
                         content=f"Permission error for tool '{tool_name}': {ask_exc}",
                     )
             else:
@@ -311,6 +319,7 @@ async def _execute_single_tool(
     if not validation.result:
         return ToolResultMessage(
             tool_call_id=tc_id,
+            name=tool_name,
             content=f"Validation error: {validation.message}",
         )
 
@@ -345,4 +354,5 @@ async def _execute_single_tool(
     if len(content) > tool.max_result_size_chars:
         content = content[: tool.max_result_size_chars] + "\n... (truncated)"
 
-    return ToolResultMessage(tool_call_id=tc_id, content=content)
+    duration_ms = (time.monotonic() - start) * 1000
+    return ToolResultMessage(tool_call_id=tc_id, name=tool_name, content=content, duration_ms=duration_ms)

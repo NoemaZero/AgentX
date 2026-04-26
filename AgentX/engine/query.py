@@ -366,6 +366,8 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
             shared_messages.append(result)
             yield StreamEvent(type=StreamEventType.TOOL_RESULT, data={
                 "tool_call_id": result.tool_call_id,
+                "name": result.name,
+                "duration_ms": result.duration_ms,
                 "content": result.content[:500] + "..." if len(result.content) > 500 else result.content,
             })
 
