@@ -23,7 +23,6 @@ from AgentX.data_types import (
     PermissionBehavior,
     PermissionDecision,
     ToolExecutionStatus,
-    ToolResult,
     ToolResultMessage,
 )
 from AgentX.pydantic_models import FrozenModel
@@ -46,6 +45,46 @@ class ToolProgressEvent(FrozenModel):
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_tool_call(tc: dict[str, Any]) -> tuple[str, str, str]:
+    """Parse tool call dict into (tool_call_id, tool_name, arguments_str)."""
+    func = tc.get("function", {})
+    return (
+        tc.get("id", ""),
+        func.get("name", ""),
+        func.get("arguments", "{}"),
+    )
+
+
+def _yield_tool_result(
+    tc_id: str,
+    tool_name: str,
+    status: ToolExecutionStatus,
+    result: ToolResultMessage | None = None,
+    duration_ms: float = 0.0,
+    error: Exception | None = None,
+) -> list[ToolProgressEvent | ToolResultMessage]:
+    """Build the pair of progress event + optional result message."""
+    preview = ""
+    if result is not None and result.content:
+        preview = result.content[:200]
+    elif error is not None:
+        preview = str(error)[:200]
+
+    event = ToolProgressEvent(
+        tool_call_id=tc_id,
+        tool_name=tool_name,
+        status=status,
+        duration_ms=duration_ms,
+        result_preview=preview,
+    )
+    return [event, result] if result is not None else [event]
+
+
+# ---------------------------------------------------------------------------
 # Batch partitioning (matching TS partitionToolCalls)
 # ---------------------------------------------------------------------------
 
@@ -63,9 +102,7 @@ def _partition_tool_calls(
     sequential: list[dict[str, Any]] = []
 
     for tc in tool_calls:
-        func = tc.get("function", {})
-        tool_name = func.get("name", "")
-        arguments_str = func.get("arguments", "{}")
+        _, tool_name, arguments_str = _parse_tool_call(tc)
 
         tool = tools_by_name.get(tool_name)
         if tool is None:
@@ -140,12 +177,11 @@ async def run_tools_streaming(
 
     # Execute concurrent tools in parallel
     if concurrent_calls:
-        # Yield started events
         for tc in concurrent_calls:
-            func = tc.get("function", {})
+            tc_id, tool_name, _ = _parse_tool_call(tc)
             yield ToolProgressEvent(
-                tool_call_id=tc.get("id", ""),
-                tool_name=func.get("name", ""),
+                tool_call_id=tc_id,
+                tool_name=tool_name,
                 status=ToolExecutionStatus.STARTED,
             )
 
@@ -162,35 +198,18 @@ async def run_tools_streaming(
         concurrent_results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for tc, result in zip(concurrent_calls, concurrent_results):
-            tc_id = tc.get("id", "")
-            func = tc.get("function", {})
-            tool_name = func.get("name", "")
-
+            tc_id, tool_name, _ = _parse_tool_call(tc)
             if isinstance(result, Exception):
                 msg = ToolResultMessage(tool_call_id=tc_id, name=tool_name, content=f"Error: {result}")
-                yield ToolProgressEvent(
-                    tool_call_id=tc_id,
-                    tool_name=tool_name,
-                    status=ToolExecutionStatus.ERROR,
-                    duration_ms=0.0,
-                    result_preview=str(result)[:200],
-                )
-                yield msg
+                for item in _yield_tool_result(tc_id, tool_name, ToolExecutionStatus.ERROR, msg, error=result):
+                    yield item
             else:
-                yield ToolProgressEvent(
-                    tool_call_id=tc_id,
-                    tool_name=tool_name,
-                    status=ToolExecutionStatus.COMPLETED,
-                    duration_ms=result.duration_ms,
-                    result_preview=result.content[:200] if result.content else "",
-                )
-                yield result
+                for item in _yield_tool_result(tc_id, tool_name, ToolExecutionStatus.COMPLETED, result, result.duration_ms):
+                    yield item
 
     # Execute sequential tools one by one
     for tc in sequential_calls:
-        tc_id = tc.get("id", "")
-        func = tc.get("function", {})
-        tool_name = func.get("name", "")
+        tc_id, tool_name, _ = _parse_tool_call(tc)
 
         yield ToolProgressEvent(
             tool_call_id=tc_id,
@@ -199,7 +218,6 @@ async def run_tools_streaming(
         )
 
         try:
-            start = time.monotonic()
             result = await _execute_single_tool(
                 tc, tools_by_name, cwd,
                 permission_checker=permission_checker,
@@ -207,28 +225,76 @@ async def run_tools_streaming(
                 ask_callback=ask_callback,
                 **kwargs,
             )
-            duration = (time.monotonic() - start) * 1000
-            yield ToolProgressEvent(
-                tool_call_id=tc_id,
-                tool_name=tool_name,
-                status=ToolExecutionStatus.COMPLETED,
-                duration_ms=duration,
-                result_preview=result.content[:200] if result.content else "",
-            )
-            yield result
+            for item in _yield_tool_result(tc_id, tool_name, ToolExecutionStatus.COMPLETED, result, result.duration_ms):
+                yield item
         except Exception as e:
-            yield ToolProgressEvent(
-                tool_call_id=tc_id,
-                tool_name=tool_name,
-                status=ToolExecutionStatus.ERROR,
-                result_preview=str(e)[:200],
-            )
-            yield ToolResultMessage(tool_call_id=tc_id, name=tool_name, content=f"Error: {e}")
+            msg = ToolResultMessage(tool_call_id=tc_id, name=tool_name, content=f"Error: {e}")
+            for item in _yield_tool_result(tc_id, tool_name, ToolExecutionStatus.ERROR, msg, error=e):
+                yield item
 
 
 # ---------------------------------------------------------------------------
 # Single tool execution
 # ---------------------------------------------------------------------------
+
+
+async def _check_permission(
+    *,
+    permission_checker: Any,
+    tool_name: str,
+    tool_input: dict[str, Any],
+    tool: BaseTool,
+    ask_callback: Any | None,
+    tc_id: str,
+) -> ToolResultMessage | None:
+    """Check tool execution permission. Returns error message if denied, None if allowed."""
+    is_read_only = tool.check_is_read_only(tool_input)
+
+    # Special handling for Bash command classification
+    if tool_name == "Bash":
+        from AgentX.permissions.classifier import is_read_only_bash
+
+        command = tool_input.get("command", "")
+        is_read_only = is_read_only_bash(command)
+
+    perm_result = permission_checker.check(
+        tool_name=tool_name,
+        tool_input=tool_input,
+        is_read_only=is_read_only,
+    )
+    if perm_result.behavior == PermissionBehavior.DENY:
+        msg = perm_result.message or f"Permission denied for tool '{tool_name}'"
+        return ToolResultMessage(tool_call_id=tc_id, name=tool_name, content=msg)
+    if perm_result.behavior == PermissionBehavior.ASK:
+        # Interactive permission prompt
+        if ask_callback is not None:
+            try:
+                decision = await ask_callback(
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    is_read_only=is_read_only,
+                )
+                if decision == PermissionDecision.DENY:
+                    return ToolResultMessage(
+                        tool_call_id=tc_id,
+                        name=tool_name,
+                        content=f"Permission denied by user for tool '{tool_name}'",
+                    )
+                if decision == PermissionDecision.ALLOW_SESSION:
+                    permission_checker.grant_session_permission(tool_name)
+                # ALLOW_ONCE or ALLOW_SESSION → fall through to execute
+            except Exception as ask_exc:
+                logger.warning("Permission ask callback error: %s", ask_exc)
+                return ToolResultMessage(
+                    tool_call_id=tc_id,
+                    name=tool_name,
+                    content=f"Permission error for tool '{tool_name}': {ask_exc}",
+                )
+        else:
+            # No interactive callback available — auto-allow (matches bypassPermissions)
+            logger.debug("Permission 'ask' for %s — no callback, auto-allowing", tool_name)
+
+    return None
 
 
 async def _execute_single_tool(
@@ -242,10 +308,7 @@ async def _execute_single_tool(
 ) -> ToolResultMessage:
     """Execute a single tool call and return a ToolResultMessage."""
 
-    tc_id = tool_call.get("id", "")
-    func = tool_call.get("function", {})
-    tool_name = func.get("name", "")
-    arguments_str = func.get("arguments", "{}")
+    tc_id, tool_name, arguments_str = _parse_tool_call(tool_call)
     start = time.monotonic()
 
     tool = tools_by_name.get(tool_name)
@@ -268,51 +331,16 @@ async def _execute_single_tool(
 
     # Check permissions
     if permission_checker is not None:
-        is_read_only = tool.check_is_read_only(tool_input)
-
-        # Special handling for Bash command classification
-        if tool_name == "Bash":
-            from AgentX.permissions.classifier import is_read_only_bash
-
-            command = tool_input.get("command", "")
-            is_read_only = is_read_only_bash(command)
-
-        perm_result = permission_checker.check(
+        perm_error = await _check_permission(
+            permission_checker=permission_checker,
             tool_name=tool_name,
             tool_input=tool_input,
-            is_read_only=is_read_only,
+            tool=tool,
+            ask_callback=ask_callback,
+            tc_id=tc_id,
         )
-        if perm_result.behavior == "deny":
-            msg = perm_result.message or f"Permission denied for tool '{tool_name}'"
-            return ToolResultMessage(tool_call_id=tc_id, name=tool_name, content=msg)
-        if perm_result.behavior == "ask":
-            # Interactive permission prompt
-            if ask_callback is not None:
-                try:
-                    decision = await ask_callback(
-                        tool_name=tool_name,
-                        tool_input=tool_input,
-                        is_read_only=is_read_only,
-                    )
-                    if decision == PermissionDecision.DENY:
-                        return ToolResultMessage(
-                            tool_call_id=tc_id,
-                            name=tool_name,
-                            content=f"Permission denied by user for tool '{tool_name}'",
-                        )
-                    if decision == PermissionDecision.ALLOW_SESSION:
-                        permission_checker.grant_session_permission(tool_name)
-                    # ALLOW_ONCE or ALLOW_SESSION → fall through to execute
-                except Exception as ask_exc:
-                    logger.warning("Permission ask callback error: %s", ask_exc)
-                    return ToolResultMessage(
-                        tool_call_id=tc_id,
-                        name=tool_name,
-                        content=f"Permission error for tool '{tool_name}': {ask_exc}",
-                    )
-            else:
-                # No interactive callback available — auto-allow (matches bypassPermissions)
-                logger.debug("Permission 'ask' for %s — no callback, auto-allowing", tool_name)
+        if perm_error is not None:
+            return perm_error
 
     # Validate input
     validation = await tool.validate_input(tool_input)
