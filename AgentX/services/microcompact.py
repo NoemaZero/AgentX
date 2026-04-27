@@ -28,13 +28,21 @@ class MicrocompactSummary(UserMessage):
     Translation of microcompact summary in TS.
     """
 
-    def __init__(self, summary: str, message_count: int, start_idx: int, end_idx: int):
-        content = f"[Microcompact: {message_count} messages {start_idx}-{end_idx}]\n{summary}"
-        super().__init__(content=content)
-        self.summary = summary
-        self.message_count = message_count
-        self.start_idx = start_idx
-        self.end_idx = end_idx
+    summary: str = ""
+    message_count: int = 0
+    start_idx: int = 0
+    end_idx: int = 0
+
+    @classmethod
+    def create(cls, summary: str, message_count: int, start_idx: int, end_idx: int) -> "MicrocompactSummary":
+        """Factory method to create a MicrocompactSummary."""
+        return cls(
+            content=f"[Microcompact: {message_count} messages {start_idx}-{end_idx}]\n{summary}",
+            summary=summary,
+            message_count=message_count,
+            start_idx=start_idx,
+            end_idx=end_idx,
+        )
 
 
 class MicrocompactTracker(MutableModel):

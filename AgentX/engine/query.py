@@ -30,6 +30,11 @@ from AgentX.data_types import (
     UserMessage,
 )
 from AgentX.pydantic_models import FrozenModel, MutableModel
+from AgentX.services.tools.orchestration import _parse_tool_call
+from AgentX.services.context_collapse import maybe_collapse_context
+from AgentX.services.microcompact import try_microcompact
+from AgentX.services.snip_compaction import try_snip_compact
+from AgentX.utils.text import truncate_content
 
 logger = logging.getLogger(__name__)
 
@@ -114,19 +119,6 @@ class QueryParams(FrozenModel):
     def from_runtime(cls, **kwargs: Any) -> "QueryParams":
         """Construct params without copying mutable runtime references."""
         return cls.model_construct(**kwargs)
-
-
-# ── Helper: parse tool call (matches orchestration.py) ──
-
-
-def _parse_tool_call(tc: dict[str, Any]) -> tuple[str, str, str]:
-    """Parse tool call dict into (tool_call_id, tool_name, arguments_str)."""
-    func = tc.get("function", {})
-    return (
-        tc.get("id", ""),
-        func.get("name", ""),
-        func.get("arguments", "{}"),
-    )
 
 
 # ── Helper: detect error categories from API exceptions ──
@@ -295,8 +287,9 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
 
         # ── Step 2.5: Context Collapse check (translation of contextCollapse) ──
         if params.context_collapse_tracker is not None and params.config.enable_context_collapse:
-            collapsed_msgs, was_collapsed = params.context_collapse_tracker.maybe_collapse_context(
+            collapsed_msgs, was_collapsed = maybe_collapse_context(
                 state.messages,
+                params.context_collapse_tracker,
             )
             if was_collapsed:
                 yield StreamEvent(type=StreamEventType.AUTO_COMPACT, data={
@@ -310,8 +303,9 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
 
         # ── Step 2.7: Microcompact check (translation of microcompact) ──
         if params.microcompact_tracker is not None and params.config.enable_microcompact:
-            snipped_msgs, was_snipped = params.microcompact_tracker.try_microcompact(
+            snipped_msgs, was_snipped = try_microcompact(
                 state.messages,
+                params.microcompact_tracker,
             )
             if was_snipped:
                 yield StreamEvent(type=StreamEventType.AUTO_COMPACT, data={
@@ -325,8 +319,9 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
 
         # ── Step 2.9: Snip Compaction check (translation of snipCompact) ──
         if params.snip_compaction_tracker is not None and params.config.enable_snip_compaction:
-            snipped_msgs, was_snipped = params.snip_compaction_tracker.try_snip_compact(
+            snipped_msgs, was_snipped = try_snip_compact(
                 state.messages,
+                params.snip_compaction_tracker,
             )
             if was_snipped:
                 yield StreamEvent(type=StreamEventType.AUTO_COMPACT, data={
@@ -405,7 +400,8 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
                     state.transition_reason = TransitionReason.FALLBACK
 
                     # 3. Update config's model (translation of toolUseContext.options.mainLoopModel)
-                    params.config.model = current_model
+                    # Note: Config is FrozenModel, so we use model_copy for immutability
+                    params.config = params.config.model_copy(update={"model": current_model})
 
                     # 4. Notify user (translation of yield createSystemMessage in query.ts:70-73)
                     yield StreamEvent(
@@ -588,7 +584,7 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
                     "tool_call_id": result.tool_call_id,
                     "name": result.name,
                     "duration_ms": result.duration_ms,
-                    "content": result.content[:500] + "..." if len(result.content) > 500 else result.content,
+                    "content": truncate_content(result.content),
                 })
 
         # ── Step 8.5: Tool Use Summary (translation of Haiku summary in query.ts) ──

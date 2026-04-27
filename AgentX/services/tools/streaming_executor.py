@@ -12,6 +12,7 @@ from typing import Any, AsyncIterator, Optional
 
 from AgentX.tools.base import BaseTool
 from AgentX.data_types import ToolResultMessage, StreamEvent, StreamEventType
+from AgentX.utils.text import truncate_content
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ class StreamingToolExecutor:
                     data={
                         "tool_call_id": result.tool_call_id,
                         "name": result.name,
-                        "content": result.content[:500] + "..." if len(result.content) > 500 else result.content,
+                        "content": truncate_content(result.content),
                     },
                 )
 

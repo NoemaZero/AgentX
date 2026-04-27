@@ -13,6 +13,7 @@ from AgentX.data_types import (
     ToolResultMessage,
     UserMessage,
 )
+from AgentX.utils.text import truncate_content
 
 logger = logging.getLogger(__name__)
 

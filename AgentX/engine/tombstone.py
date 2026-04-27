@@ -20,11 +20,17 @@ class TombstoneMessage(UserMessage):
     Used during fallback/error recovery to clear orphaned UI messages.
     """
 
-    def __init__(self, reason: str, original_message: Message | None = None):
-        content = f"[TOMBSTONE: {reason}]"
-        super().__init__(content=content)
-        self.tombstone_reason = reason
-        self.original_message_type = type(original_message).__name__ if original_message else None
+    tombstone_reason: str = ""
+    original_message_type: str | None = None
+
+    @classmethod
+    def create(cls, reason: str, original_message: Message | None = None) -> "TombstoneMessage":
+        """Factory method to create a TombstoneMessage."""
+        return cls(
+            content=f"[TOMBSTONE: {reason}]",
+            tombstone_reason=reason,
+            original_message_type=type(original_message).__name__ if original_message else None,
+        )
 
 
 def yield_tombstone_messages(

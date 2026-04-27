@@ -28,11 +28,17 @@ class CollapsedMessage(UserMessage):
     Translation of collapsed boundary message in TS.
     """
 
-    def __init__(self, summary: str, collapsed_count: int):
-        content = f"[Context collapsed: {collapsed_count} messages]\n{summary}"
-        super().__init__(content=content)
-        self.collapsed_count = collapsed_count
-        self.summary = summary
+    collapsed_count: int = 0
+    summary: str = ""
+
+    @classmethod
+    def create(cls, summary: str, collapsed_count: int) -> "CollapsedMessage":
+        """Factory method to create a CollapsedMessage."""
+        return cls(
+            content=f"[Context collapsed: {collapsed_count} messages]\n{summary}",
+            collapsed_count=collapsed_count,
+            summary=summary,
+        )
 
 
 class ContextCollapseTracker(MutableModel):
