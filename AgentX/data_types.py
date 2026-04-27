@@ -113,10 +113,12 @@ class StreamEventType(StrEnum):
     STREAM_END = "stream_end"
     STREAM_REQUEST_START = "stream_request_start"
     STREAM_START = "stream_start"
+    SYSTEM_MESSAGE = "system_message"
     THINKING_DELTA = "thinking_delta"
     THINKING_END = "thinking_end"
     TOOL_RESULT = "tool_result"
     TOOL_USE = "tool_use"
+    TOOL_USE_SUMMARY = "tool_use_summary"
     USAGE = "usage"
 
 

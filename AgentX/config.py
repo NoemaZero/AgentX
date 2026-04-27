@@ -50,6 +50,20 @@ class Config(FrozenModel):
     append_system_prompt: str | None = None
     max_budget_usd: float | None = None
     non_interactive: bool = False
+    fallback_model: str | None = None  # Fallback model if primary fails (translation of fallbackModel)
+
+    # Feature flags (translation of feature() system in TypeScript)
+    # These control optional features and can be toggled via environment variables
+    enable_streaming_tool_executor: bool = False  # Enable StreamingToolExecutor
+    enable_context_collapse: bool = False  # Enable context collapse
+    enable_microcompact: bool = False  # Enable microcompact
+    enable_snip_compaction: bool = False  # Enable snip compaction
+    enable_token_budget: bool = False  # Enable token budget tracking
+    enable_task_budget: bool = False  # Enable task budget tracking
+    enable_tool_use_summary: bool = False  # Enable Haiku tool use summary
+    enable_image_validation: bool = True  # Enable image validation
+    enable_tombstone_messages: bool = False  # Enable tombstone messages for orphan cleanup
+    enable_content_replacement: bool = False  # Enable content replacement storage
 
 
 def load_config(
@@ -69,6 +83,7 @@ def load_config(
     append_system_prompt: str | None = None,
     max_budget_usd: float | None = None,
     non_interactive: bool = False,
+    fallback_model: str | None = None,
 ) -> Config:
     """Build config from env vars + explicit overrides."""
     resolved_api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
@@ -107,4 +122,5 @@ def load_config(
         append_system_prompt=append_system_prompt,
         max_budget_usd=max_budget_usd,
         non_interactive=non_interactive,
+        fallback_model=fallback_model,
     )

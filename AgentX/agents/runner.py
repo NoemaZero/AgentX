@@ -480,6 +480,7 @@ async def run_agent(
             cwd=cwd or config.cwd,
             verbose=config.verbose,
             permission_mode=config.permission_mode,
+            fallback_model=config.fallback_model,
         )
 
         sub_client = LLMClient(sub_config)
@@ -491,6 +492,7 @@ async def run_agent(
             tools_by_name=tools_by_name,
             client=sub_client,
             config=sub_config,
+            fallback_model=sub_config.fallback_model,
             max_turns=sub_config.max_turns,
             cwd=sub_config.cwd,
             permission_checker=parent_engine._permission_checker,

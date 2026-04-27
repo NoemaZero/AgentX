@@ -63,6 +63,7 @@ class TransitionReason(StrEnum):
     PROACTIVE_COMPACT = "proactive_compact"
     AUTO_COMPACT = "auto_compact"
     API_RETRY = "api_retry"
+    FALLBACK = "fallback"
 
 
 class QueryState(MutableModel):
@@ -77,6 +78,16 @@ class QueryState(MutableModel):
     transition_reason: str | None = None
 
 
+class FallbackTriggeredError(Exception):
+    """Exception raised when model fallback is triggered (translation of FallbackTriggeredError)."""
+
+    def __init__(self, original_model: str, fallback_model: str, status_code: int | None = None):
+        self.original_model = original_model
+        self.fallback_model = fallback_model
+        self.status_code = status_code
+        super().__init__(f"Fallback triggered: {original_model} -> {fallback_model}")
+
+
 class QueryParams(FrozenModel):
     """Parameters for a query loop — translation of QueryParams."""
 
@@ -86,6 +97,7 @@ class QueryParams(FrozenModel):
     tools_by_name: dict[str, BaseTool]
     client: LLMClient
     config: Config
+    fallback_model: str | None = None  # Fallback model if primary fails (translation of fallbackModel)
     max_turns: int = 100
     cwd: str = ""
     engine: Any = None  # QueryEngine ref for sub-agent tool
@@ -93,6 +105,10 @@ class QueryParams(FrozenModel):
     auto_compact_tracker: Any = None  # AutoCompactTracker
     hook_manager: Any = None  # HookManager
     ask_callback: Any = None  # async callback for permission "ask" prompts
+    budget_tracker: Any = None  # TokenBudgetTracker (translation of tokenBudget in TS)
+    context_collapse_tracker: Any = None  # ContextCollapseTracker (translation of contextCollapse)
+    microcompact_tracker: Any = None  # MicrocompactTracker (translation of microcompact)
+    snip_compaction_tracker: Any = None  # SnipCompactionTracker (translation of snipCompact)
 
     @classmethod
     def from_runtime(cls, **kwargs: Any) -> "QueryParams":
@@ -136,6 +152,27 @@ def _finish_reason_is_length(result: StreamResult | None) -> bool:
         return False
     reason = getattr(result, "stop_reason", None)
     return reason == "length"
+
+
+def _is_fallback_error(exc: Exception) -> bool:
+    """Check if exception should trigger model fallback (translation of isFallbackError)."""
+    status_code = getattr(exc, "status_code", None)
+    msg = str(exc).lower()
+
+    # 429 rate limit, 5xx server errors (excluding 502/503 which are retryable)
+    # 400 bad request with model-related errors
+    if status_code in (429, 500, 529):
+        return True
+
+    # Model-specific error messages
+    fallback_keywords = [
+        "model not found",
+        "invalid model",
+        "model is currently overloaded",
+        "model is unavailable",
+        "does not exist",
+    ]
+    return any(kw in msg for kw in fallback_keywords)
 
 
 async def _try_reactive_compact(
@@ -230,6 +267,9 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
     # Shared mutable list for message sync with caller
     shared_messages = params.messages
 
+    # Initialize current_model (translation of currentModel in TS query.ts)
+    current_model = params.config.model
+
     while True:
         # ── Step 1: Signal request start ──
         yield StreamEvent(
@@ -253,6 +293,51 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
                 shared_messages.clear()
                 shared_messages.extend(compacted)
 
+        # ── Step 2.5: Context Collapse check (translation of contextCollapse) ──
+        if params.context_collapse_tracker is not None and params.config.enable_context_collapse:
+            collapsed_msgs, was_collapsed = params.context_collapse_tracker.maybe_collapse_context(
+                state.messages,
+            )
+            if was_collapsed:
+                yield StreamEvent(type=StreamEventType.AUTO_COMPACT, data={
+                    "before": len(state.messages),
+                    "after": len(collapsed_msgs),
+                    "type": "context_collapse",
+                })
+                state.messages = collapsed_msgs
+                shared_messages.clear()
+                shared_messages.extend(collapsed_msgs)
+
+        # ── Step 2.7: Microcompact check (translation of microcompact) ──
+        if params.microcompact_tracker is not None and params.config.enable_microcompact:
+            snipped_msgs, was_snipped = params.microcompact_tracker.try_microcompact(
+                state.messages,
+            )
+            if was_snipped:
+                yield StreamEvent(type=StreamEventType.AUTO_COMPACT, data={
+                    "before": len(state.messages),
+                    "after": len(snipped_msgs),
+                    "type": "microcompact",
+                })
+                state.messages = snipped_msgs
+                shared_messages.clear()
+                shared_messages.extend(snipped_msgs)
+
+        # ── Step 2.9: Snip Compaction check (translation of snipCompact) ──
+        if params.snip_compaction_tracker is not None and params.config.enable_snip_compaction:
+            snipped_msgs, was_snipped = params.snip_compaction_tracker.try_snip_compact(
+                state.messages,
+            )
+            if was_snipped:
+                yield StreamEvent(type=StreamEventType.AUTO_COMPACT, data={
+                    "before": len(state.messages),
+                    "after": len(snipped_msgs),
+                    "type": "snip_compaction",
+                })
+                state.messages = snipped_msgs
+                shared_messages.clear()
+                shared_messages.extend(snipped_msgs)
+
         # ── Step 3–4: Call streaming API ──
         assistant_msg: AssistantMessage | None = None
         stream_result: StreamResult | None = None
@@ -271,12 +356,18 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
                 system_prompt=params.system_prompt,
                 tools=openai_tools if openai_tools else None,
                 max_tokens=effective_max_tokens,
+                model=current_model,  # NEW: support dynamic model (fallback)
             ):
                 yield event
 
                 if event.type == StreamEventType.STREAM_END and isinstance(event.data, StreamResult):
                     stream_result = event.data
                     assistant_msg = event.data.message
+
+                    # Track token usage (translation of tokenBudget tracking in TS)
+                    if params.budget_tracker is not None and stream_result.usage:
+                        params.budget_tracker.track_usage(stream_result.usage)
+
                 elif event.type == StreamEventType.ERROR:
                     api_error_str = str(event.data)
         except Exception as exc:
@@ -292,6 +383,51 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
                 withheld_max_output_tokens = True
                 logger.info("Withholding max_output_tokens error for recovery")
             else:
+                # ── Model fallback (translation of fallbackModel logic in query.ts:894-951) ──
+                if _is_fallback_error(exc) and params.fallback_model and current_model != params.fallback_model:
+                    original_model = current_model
+                    logger.warning(
+                        "Fallback triggered: %s → %s (error: %s)",
+                        current_model,
+                        params.fallback_model,
+                        api_error_str,
+                    )
+
+                    # 1. Clear partial response state (translation of clearing assistantMessages/toolResults)
+                    assistant_msg = None
+                    stream_result = None
+                    api_error_str = None
+                    withheld_prompt_too_long = False
+                    withheld_max_output_tokens = False
+
+                    # 2. Switch model
+                    current_model = params.fallback_model
+                    state.transition_reason = TransitionReason.FALLBACK
+
+                    # 3. Update config's model (translation of toolUseContext.options.mainLoopModel)
+                    params.config.model = current_model
+
+                    # 4. Notify user (translation of yield createSystemMessage in query.ts:70-73)
+                    yield StreamEvent(
+                        type=StreamEventType.SYSTEM_MESSAGE,
+                        data={
+                            "content": f"Switched to {params.fallback_model} due to high demand for {original_model}",
+                            "level": "warning",
+                        },
+                    )
+
+                    # 5. Log analytics event (translation of logEvent('tengu_model_fallback_triggered'))
+                    logger.info(
+                        "Model fallback: original=%s, fallback=%s, entrypoint=cli",
+                        original_model,
+                        params.fallback_model,
+                    )
+
+                    # TODO: Future - implement thinking signature stripping (stripSignatureBlocks)
+                    # TODO: Future - implement StreamingToolExecutor.discard() when available
+
+                    continue
+
                 # ── Retryable server errors (429, 5xx, 529) ──
                 status_code = getattr(exc, "status_code", None)
                 if status_code in (429, 500, 502, 503, 529):
@@ -371,6 +507,14 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
                 except Exception as hook_exc:
                     logger.warning("Stop hook error: %s", hook_exc)
 
+            # ── Check token budget (translation of tokenBudget check in TS) ──
+            if params.budget_tracker is not None:
+                can_continue, reason = params.budget_tracker.check_continuation()
+                if not can_continue:
+                    logger.warning("Token budget exceeded: %s", reason)
+                    yield StreamEvent(type=StreamEventType.QUERY_ERROR, data=f"Token budget exceeded: {reason}")
+                    return
+
             # ── Normal completion ──
             yield StreamEvent(type=StreamEventType.QUERY_COMPLETE, data={
                 "turns": state.turn_count + 1,
@@ -387,29 +531,80 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
                 "arguments": arguments_str,
             })
 
-        tool_results = await run_tools(
-            tool_calls=tool_calls,
-            tools_by_name=params.tools_by_name,
-            cwd=params.cwd,
-            permission_checker=params.permission_checker,
-            hook_manager=params.hook_manager,
-            ask_callback=params.ask_callback,
-            engine=params.engine,
-        )
+        # Use StreamingToolExecutor if enabled (translation of StreamingToolExecutor in TS)
+        if params.config.enable_streaming_tool_executor:
+            from AgentX.services.tools.streaming_executor import StreamingToolExecutor
+
+            executor = StreamingToolExecutor(
+                tools_by_name=params.tools_by_name,
+                cwd=params.cwd,
+                permission_checker=params.permission_checker,
+                hook_manager=params.hook_manager,
+                ask_callback=params.ask_callback,
+                engine=params.engine,
+            )
+
+            tool_results: list[ToolResultMessage] = []
+            async for event in executor.execute_streaming(tool_calls):
+                if event.type == StreamEventType.TOOL_RESULT:
+                    result_data = event.data
+                    # Re-yield with full content (not truncated)
+                    yield event
+                    # Find the result message from executor
+                    if result_data and "tool_call_id" in result_data:
+                        from AgentX.tools.base import ToolResultMessage
+                        # Results are collected internally by executor
+                        pass
+                else:
+                    yield event
+
+            # Get all results from executor
+            tool_results = executor.get_all_results()
+        else:
+            # Original non-streaming path
+            tool_results = await run_tools(
+                tool_calls=tool_calls,
+                tools_by_name=params.tools_by_name,
+                cwd=params.cwd,
+                permission_checker=params.permission_checker,
+                hook_manager=params.hook_manager,
+                ask_callback=params.ask_callback,
+                engine=params.engine,
+            )
 
         for result in tool_results:
             state.messages.append(result)
             shared_messages.append(result)
-            yield StreamEvent(type=StreamEventType.TOOL_RESULT, data={
-                "tool_call_id": result.tool_call_id,
-                "name": result.name,
-                "duration_ms": result.duration_ms,
-                "content": result.content[:500] + "..." if len(result.content) > 500 else result.content,
+
+            # Apply content replacement if enabled (translation of recordContentReplacement)
+            if params.config.enable_content_replacement:
+                # TODO: Integrate ContentReplacementStore - need to store at session level
+                # For now, just pass through
+                pass
+
+            if not params.config.enable_streaming_tool_executor:
+                # Only yield here for non-streaming path (streaming path already yielded)
+                yield StreamEvent(type=StreamEventType.TOOL_RESULT, data={
+                    "tool_call_id": result.tool_call_id,
+                    "name": result.name,
+                    "duration_ms": result.duration_ms,
+                    "content": result.content[:500] + "..." if len(result.content) > 500 else result.content,
+                })
+
+        # ── Step 8.5: Tool Use Summary (translation of Haiku summary in query.ts) ──
+        if assistant_msg and tool_calls and params.config.fallback_model:
+            # TODO: Implement Tool Use Summary generation using Haiku model
+            # TypeScript original uses Haiku to generate summary of tool calls
+            # For now, yield a placeholder event
+            yield StreamEvent(type=StreamEventType.TOOL_USE_SUMMARY, data={
+                "tool_count": len(tool_calls),
+                "summary": "Tool use summary (not yet implemented)",
             })
 
-        # ── Step 10: Attachment injection — drain agent notifications ──
+        # ── Step 10: Attachment injection (translation of attachment system in query.ts) ──
         state.turn_count += 1
 
+        # 10.1: Drain agent notifications (already implemented)
         if params.engine is not None and hasattr(params.engine, "drain_agent_notifications"):
             notifications = params.engine.drain_agent_notifications()
             for notification in notifications:
@@ -417,6 +612,36 @@ async def query(params: QueryParams) -> AsyncIterator[StreamEvent]:
                 state.messages.append(notification_msg)
                 shared_messages.append(notification_msg)
                 yield StreamEvent(type=StreamEventType.AGENT_NOTIFICATION, data=notification)
+
+        # 10.2: TODO - Memory attachments (translation of Memory attachment system)
+        # TypeScript original injects memory attachments from memdir system
+        # if params.memdir is not None:
+        #     memory_attachments = params.memdir.get_attachments()
+        #     for attachment in memory_attachments:
+        #         attachment_msg = UserMessage(content=attachment)
+        #         state.messages.append(attachment_msg)
+        #         shared_messages.append(attachment_msg)
+        #         yield StreamEvent(type=StreamEventType.AGENT_NOTIFICATION, data=f"[Memory] {attachment[:100]}")
+
+        # 10.3: TODO - Skill attachments (translation of Skill attachment system)
+        # TypeScript original injects skill attachments
+        # if params.skill_manager is not None:
+        #     skill_attachments = params.skill_manager.get_attachments()
+        #     for attachment in skill_attachments:
+        #         attachment_msg = UserMessage(content=attachment)
+        #         state.messages.append(attachment_msg)
+        #         shared_messages.append(attachment_msg)
+        #         yield StreamEvent(type=StreamEventType.AGENT_NOTIFICATION, data=f"[Skill] {attachment[:100]}")
+
+        # 10.4: TODO - MCP attachments (translation of MCP attachment system)
+        # TypeScript original injects MCP server attachments
+        # if params.mcp_manager is not None:
+        #     mcp_attachments = params.mcp_manager.get_attachments()
+        #     for attachment in mcp_attachments:
+        #         attachment_msg = UserMessage(content=attachment)
+        #         state.messages.append(attachment_msg)
+        #         shared_messages.append(attachment_msg)
+        #         yield StreamEvent(type=StreamEventType.AGENT_NOTIFICATION, data=f"[MCP] {attachment[:100]}")
 
         # ── Step 11: Max turns check ──
         if state.turn_count >= params.max_turns:

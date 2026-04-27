@@ -138,6 +138,7 @@ class QueryEngine:
             tools_by_name=self._tools_by_name,
             client=self._client,
             config=self._config,
+            fallback_model=self._config.fallback_model,
             max_turns=self._config.max_turns,
             cwd=self._config.cwd,
             engine=self,

@@ -160,6 +160,7 @@ class LLMClient:
         tools: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        model: str | None = None,  # NEW: support dynamic model override (for fallback)
     ) -> AsyncIterator[StreamEvent]:
         """Stream a chat completion. Yields StreamEvents.
 
@@ -170,6 +171,7 @@ class LLMClient:
 
         effective_temp = temperature if temperature is not None else self._config.temperature
         effective_max_tokens = max_tokens or self._config.output_tokens or None
+        effective_model = model or self._config.model  # NEW: use override if provided
 
         yield StreamEvent(type=StreamEventType.STREAM_START)
 
@@ -183,6 +185,7 @@ class LLMClient:
         stream = self._provider.invoke(
             openai_messages,
             tools=tools,
+            model=effective_model,  # NEW: pass dynamic model
             max_tokens=effective_max_tokens,
             temperature=effective_temp,
             stream=True,

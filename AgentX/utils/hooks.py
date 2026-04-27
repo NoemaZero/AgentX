@@ -78,10 +78,18 @@ class HookManager:
                 logger.warning("Post-tool-use hook error: %s", exc)
         return result
 
-    async def run_stop(self) -> None:
-        """Run stop hooks (session ending)."""
+    async def run_stop(self) -> dict[str, Any] | None:
+        """Run stop hooks (session ending).
+
+        Translation of handleStopHooks() from hooks.ts.
+        Returns the last hook's return value, or None.
+        """
+        last_result: dict[str, Any] | None = None
         for hook in self._hooks.get("stop", []):
             try:
-                await hook()
+                result = await hook()
+                if isinstance(result, dict):
+                    last_result = result
             except Exception as exc:
                 logger.warning("Stop hook error: %s", exc)
+        return last_result
